@@ -3,14 +3,14 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key><string>ko</string>
-  <key>CFBundleDisplayName</key><string>FairPlayed 통합</string>
+  <key>CFBundleDisplayName</key><string>FairPlayed 패커</string>
   <key>CFBundleExecutable</key><string>FairPlayedPacker</string>
   <key>CFBundleIdentifier</key><string>com.choesunbeom.fairplayedpacker</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>FairPlayedPacker</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>2.0</string>
-  <key>CFBundleVersion</key><string>2</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
   <key>LSRequiresIPhoneOS</key><true/>
   <key>MinimumOSVersion</key><string>17.0</string>
   <key>UIFileSharingEnabled</key><true/>
@@ -27,7 +27,7 @@
       <array>
         <dict>
           <key>UISceneConfigurationName</key><string>Default</string>
-          <key>UISceneDelegateClassName</key><string>SceneDelegate</string>
+          <key>UISceneDelegateClassName</key><string>PackerScene</string>
         </dict>
       </array>
     </dict>
