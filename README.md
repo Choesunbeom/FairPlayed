@@ -176,3 +176,11 @@ FairPlayed/
 ## Contributing
 
 Pull requests are welcome. Bug fixes, compatibility improvements, documentation updates, and additional testing on other iOS versions are especially appreciated.
+
+---
+
+## 🇰🇷 iPhone 단독 사용 실험용 포크
+
+이 포크에는 [미서명 FairPlayed IPA 자동 빌드](https://github.com/Choesunbeom/FairPlayed/actions/workflows/build-ios-ipa.yml)와 [아이폰에서 대상 IPA를 포함시키는 스크립트](tools/repack_for_iphone.py)가 추가되어 있습니다.
+
+**반드시 [한국어 설치·재패키징 안내](docs/IPHONE_KO.md)를 먼저 읽어 주세요.** 기본 FairPlayed IPA만 설치해도 App Store 앱이 바로 복호화되는 것은 아닙니다. 대상 IPA를 먼저 포함해 서명해야 하며, iOS 27.2.1에서 실제 복호화 성공은 아직 확인되지 않았습니다.
