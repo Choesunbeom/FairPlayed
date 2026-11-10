@@ -1,0 +1,70 @@
+name: Build FairPlayed unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-ios-ipa.yml'
+      - 'FairPlayed/**'
+      - 'tools/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - name: Check out FairPlayed fork
+        uses: actions/checkout@v4
+
+      - name: Validate IPA repackager
+        run: python3 -m unittest discover -s tools/tests -v
+
+      - name: Show Xcode and available SDKs
+        shell: bash
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks
+          xcodebuild -list -project FairPlayed/FairPlayed.xcodeproj
+
+      - name: Build unsigned iPhone app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project FairPlayed/FairPlayed.xcodeproj \
+            -scheme FairPlayed \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/.build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM='' \
+            build 2>&1 | tee xcodebuild.log
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$PWD/.build/Build/Products/Release-iphoneos/FairPlayed.app"
+          test -f "$APP/FairPlayed"
+          test -f "$APP/Info.plist"
+          mkdir -p "ipa/Payload"
+          /usr/bin/ditto "$APP" "ipa/Payload/FairPlayed.app"
+          (cd ipa && /usr/bin/zip -qry -9 ../FairPlayed-base-unsigned.ipa Payload)
+          unzip -t FairPlayed-base-unsigned.ipa | tail -1
+          ls -lh FairPlayed-base-unsigned.ipa
+
+      - name: Upload IPA and build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FairPlayed-unsigned-IPA
+          path: |
+            FairPlayed-base-unsigned.ipa
+            xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 7
