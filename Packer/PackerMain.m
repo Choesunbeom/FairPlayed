@@ -139,6 +139,7 @@ static NSString *FPPack(NSString *base, NSString *target, NSString **details, NS
 @property(nonatomic,strong) NSString *targetPath;
 @property(nonatomic,strong) NSString *resultPath;
 @property(nonatomic,assign) NSInteger selecting;
+@property(nonatomic,assign) BOOL copyInProgress;
 @end
 @implementation PackerController
 - (UILabel *)caption:(NSString *)text size:(CGFloat)size bold:(BOOL)bold {
@@ -209,6 +210,7 @@ static NSString *FPPack(NSString *base, NSString *target, NSString **details, NS
 - (void)selectBase { [self choose:1]; }
 - (void)selectTarget { [self choose:2]; }
 - (void)choose:(NSInteger)kind {
+    if (self.copyInProgress) return;
     self.selecting = kind;
     UTType *ipa = [UTType typeWithIdentifier:@"com.apple.itunes.ipa"];
     NSArray *types = ipa ? @[ipa, UTTypeZIP, UTTypeData] : @[UTTypeZIP, UTTypeData];
@@ -218,25 +220,50 @@ static NSString *FPPack(NSString *base, NSString *target, NSString **details, NS
 }
 - (void)documentPicker:(UIDocumentPickerViewController *)picker didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSURL *url = urls.firstObject;
-    if (!url) return;
+    if (!url || self.copyInProgress) return;
     NSInteger kind = self.selecting;
-    BOOL access = [url startAccessingSecurityScopedResource];
+    self.copyInProgress = YES;
+    self.packageButton.enabled = NO;
+    self.shareButton.enabled = NO;
+    self.resultPath = nil;
+    self.status.text = @"선택한 IPA를 가져오는 중… 파일 크기에 따라 시간이 걸릴 수 있습니다.";
+    [self.spinner startAnimating];
     NSString *dst = [FPDocuments() stringByAppendingPathComponent:kind == 1 ? @"FairPlayed-input.ipa" : @"App-input.ipa"];
-    NSError *err = nil;
-    [NSFileManager.defaultManager removeItemAtPath:dst error:nil];
-    BOOL ok = [NSFileManager.defaultManager copyItemAtURL:url toURL:[NSURL fileURLWithPath:dst] error:&err];
-    if (access) [url stopAccessingSecurityScopedResource];
-    if (!ok) {
-        self.status.text = [NSString stringWithFormat:@"IPA 가져오기 실패: %@", err.localizedDescription];
-        return;
-    }
-    if (kind == 1) { self.basePath = dst; self.baseLabel.text = [NSString stringWithFormat:@"✓ %@", url.lastPathComponent]; }
-    else { self.targetPath = dst; self.targetLabel.text = [NSString stringWithFormat:@"✓ %@", url.lastPathComponent]; }
-    self.status.text = self.basePath && self.targetPath ? @"준비 완료. IPA를 만들 수 있습니다." : @"다른 IPA도 선택하세요.";
-    self.resultPath = nil; self.shareButton.enabled = NO;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        BOOL access = [url startAccessingSecurityScopedResource];
+        NSString *temporary = [dst stringByAppendingString:@".importing"];
+        NSError *error = nil;
+        NSFileManager *fm = NSFileManager.defaultManager;
+        [fm removeItemAtPath:temporary error:nil];
+        BOOL copied = [fm copyItemAtURL:url toURL:[NSURL fileURLWithPath:temporary] error:&error];
+        if (access) [url stopAccessingSecurityScopedResource];
+        if (copied) {
+            [fm removeItemAtPath:dst error:nil];
+            copied = [fm moveItemAtPath:temporary toPath:dst error:&error];
+        }
+        if (!copied) [fm removeItemAtPath:temporary error:nil];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.copyInProgress = NO;
+            [self.spinner stopAnimating];
+            self.packageButton.enabled = YES;
+            if (!copied) {
+                self.status.text = [NSString stringWithFormat:@"IPA 가져오기 실패: %@", error.localizedDescription ?: @"파일 복사 오류"];
+                return;
+            }
+            if (kind == 1) {
+                self.basePath = dst;
+                self.baseLabel.text = [NSString stringWithFormat:@"✓ %@", url.lastPathComponent];
+            } else {
+                self.targetPath = dst;
+                self.targetLabel.text = [NSString stringWithFormat:@"✓ %@", url.lastPathComponent];
+            }
+            self.status.text = self.basePath && self.targetPath ? @"준비 완료. IPA를 만들 수 있습니다." : @"다른 IPA도 선택하세요.";
+        });
+    });
 }
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller { self.selecting = 0; }
 - (void)packageNow {
+    if (self.copyInProgress) return;
     if (!self.basePath || !self.targetPath) { self.status.text = @"IPA 두 개를 모두 선택하세요."; return; }
     self.packageButton.enabled = NO; self.shareButton.enabled = NO; self.status.text = @"압축 해제와 재패키징 중… 앱을 닫지 마세요.";
     [self.spinner startAnimating];
