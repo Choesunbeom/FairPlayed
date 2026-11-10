@@ -1,0 +1,91 @@
+name: Build Unified FairPlayed (iOS 27.1 SDK)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-unified-ios27.yml'
+      - 'Packer/UnifiedMain.m'
+      - 'Packer/Info.plist'
+      - 'FairPlayed/FairPlayed/fpcore.*'
+      - 'FairPlayed/FairPlayed/zipio.*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Xcode and SDK pinned to 27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "iOS SDK: $SDK_VERSION"
+          test "$SDK_VERSION" = "27.1"
+          test "$(xcodebuild -version | head -1)" = "Xcode 27.1"
+          plutil -lint Packer/Info.plist
+
+      - name: Compile ARM64 unified packer and FairPlay engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          APP="$PWD/build/Payload/FairPlayedPacker.app"
+          mkdir -p "$APP"
+          xcrun --sdk iphoneos clang \
+            -target arm64-apple-ios17.0 \
+            -isysroot "$SDK" \
+            -IFairPlayed/FairPlayed \
+            -fobjc-arc -fblocks -O2 -std=gnu17 \
+            -framework UIKit -framework Foundation \
+            -framework UniformTypeIdentifiers \
+            -lz \
+            Packer/UnifiedMain.m \
+            FairPlayed/FairPlayed/fpcore.c \
+            FairPlayed/FairPlayed/zipio.c \
+            -o "$APP/FairPlayedPacker" \
+            2>&1 | tee build-compile.log
+          cp Packer/Info.plist "$APP/Info.plist"
+          file "$APP/FairPlayedPacker"
+          plutil -lint "$APP/Info.plist"
+
+      - name: Embed a reusable clean FairPlayed IPA template
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$PWD/build/Payload/FairPlayedPacker.app"
+          (cd build && zip -qry -9 ../FairPlayed-base-template.ipa Payload)
+          test -s FairPlayed-base-template.ipa
+          unzip -t FairPlayed-base-template.ipa | tail -1
+          cp FairPlayed-base-template.ipa "$APP/FairPlayed-base-template.ipa"
+          echo "App includes the base helper IPA as a local resource"
+
+      - name: Package final unsigned SideStore IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd build && zip -qry -9 ../FairPlayedUnified-iOS27.1-unsigned.ipa Payload)
+          unzip -t FairPlayedUnified-iOS27.1-unsigned.ipa | tail -1
+          unzip -l FairPlayedUnified-iOS27.1-unsigned.ipa
+          shasum -a 256 FairPlayedUnified-iOS27.1-unsigned.ipa > checksums.txt
+          ls -lh FairPlayedUnified-iOS27.1-unsigned.ipa
+
+      - name: Upload unsigned IPA and build output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FairPlayedUnified-iOS27.1-unsigned
+          path: |
+            FairPlayedUnified-iOS27.1-unsigned.ipa
+            checksums.txt
+            build-compile.log
+          if-no-files-found: warn
+          retention-days: 14
