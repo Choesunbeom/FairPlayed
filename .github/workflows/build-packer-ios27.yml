@@ -1,0 +1,76 @@
+name: Build FairPlayed IPA Packer (iOS SDK 27.1)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-packer-ios27.yml'
+      - 'Packer/**'
+      - 'FairPlayed/FairPlayed/zipio.*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+
+      - name: Require Xcode 27.1 and iOS 27.1 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "Using SDK: $SDK"
+          xcrun --sdk iphoneos --show-sdk-version
+          [[ "$(xcrun --sdk iphoneos --show-sdk-version)" == "27.1" ]]
+          [[ "$(xcodebuild -version | head -1)" == "Xcode 27.1" ]]
+          plutil -lint Packer/Info.plist
+
+      - name: Compile native ARM64 iOS packer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/Payload/FairPlayedPacker.app
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang \
+            -target arm64-apple-ios17.0 \
+            -isysroot "$SDK" \
+            -fobjc-arc -fblocks -O2 -std=gnu17 \
+            -framework UIKit \
+            -framework Foundation \
+            -framework UniformTypeIdentifiers \
+            -lz \
+            Packer/PackerMain.m FairPlayed/FairPlayed/zipio.c \
+            -o build/Payload/FairPlayedPacker.app/FairPlayedPacker \
+            2>&1 | tee build/compile.log
+          cp Packer/Info.plist build/Payload/FairPlayedPacker.app/Info.plist
+          file build/Payload/FairPlayedPacker.app/FairPlayedPacker
+          plutil -lint build/Payload/FairPlayedPacker.app/Info.plist
+
+      - name: Make unsigned SideStore-compatible IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd build && zip -qry -9 ../FairPlayedPacker-iOS27.1-unsigned.ipa Payload)
+          unzip -t FairPlayedPacker-iOS27.1-unsigned.ipa | tail -1
+          unzip -l FairPlayedPacker-iOS27.1-unsigned.ipa
+          shasum -a 256 FairPlayedPacker-iOS27.1-unsigned.ipa > checksums.txt
+
+      - name: Upload IPA and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FairPlayedPacker-iOS27.1-unsigned
+          path: |
+            FairPlayedPacker-iOS27.1-unsigned.ipa
+            checksums.txt
+            build/compile.log
+          if-no-files-found: warn
+          retention-days: 14
