@@ -6,7 +6,7 @@
 
 ## 1. GitHub Actions에서 기본 IPA 내려받기
 
-1. [Build FairPlayed unsigned iOS IPA](../..//actions/workflows/build-ios-ipa.yml) 페이지를 엽니다.
+1. [Build FairPlayed unsigned iOS IPA](https://github.com/Choesunbeom/FairPlayed/actions/workflows/build-ios-ipa.yml) 페이지를 엽니다.
 2. **Run workflow**를 실행하거나 최신 성공 실행을 엽니다.
 3. 해당 실행의 **Artifacts**에서 `FairPlayed-unsigned-IPA` ZIP을 다운로드합니다.
 4. 압축을 풀어 `FairPlayed-base-unsigned.ipa`를 확보합니다.
