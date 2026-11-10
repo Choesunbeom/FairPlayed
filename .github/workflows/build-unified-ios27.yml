@@ -6,7 +6,7 @@ on:
     paths:
       - '.github/workflows/build-unified-ios27.yml'
       - 'Packer/UnifiedMain.m'
-      - 'Packer/Info.plist'
+      - 'Packer/Unified-Info.plist'
       - 'FairPlayed/FairPlayed/fpcore.*'
       - 'FairPlayed/FairPlayed/zipio.*'
 
@@ -31,7 +31,7 @@ jobs:
           echo "iOS SDK: $SDK_VERSION"
           test "$SDK_VERSION" = "27.1"
           test "$(xcodebuild -version | head -1)" = "Xcode 27.1"
-          plutil -lint Packer/Info.plist
+          plutil -lint Packer/Unified-Info.plist
 
       - name: Compile ARM64 unified packer and FairPlay engine
         shell: bash
@@ -53,7 +53,7 @@ jobs:
             FairPlayed/FairPlayed/zipio.c \
             -o "$APP/FairPlayedPacker" \
             2>&1 | tee build-compile.log
-          cp Packer/Info.plist "$APP/Info.plist"
+          cp Packer/Unified-Info.plist "$APP/Info.plist"
           file "$APP/FairPlayedPacker"
           plutil -lint "$APP/Info.plist"
 
