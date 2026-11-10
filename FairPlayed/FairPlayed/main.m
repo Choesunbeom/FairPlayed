@@ -488,7 +488,7 @@ static NSString *WorkDir(void) {
     self.view.backgroundColor = UIColor.systemBackgroundColor;
     UIStackView *buttons = [[UIStackView alloc] init];
     buttons.axis = UILayoutConstraintAxisHorizontal; buttons.distribution = UIStackViewDistributionFillEqually; buttons.spacing = 8;
-    NSArray *titles = @[@"Pick IPA", @"Docs IPAs", @"Export", @"Share"];
+    NSArray *titles = @[@"IPA 검사", @"파일 검사", @"복호화", @"결과 공유"];
     for (NSUInteger i = 0; i < titles.count; i++) {
         UIButton *b = [UIButton buttonWithConfiguration:UIButtonConfiguration.tintedButtonConfiguration primaryAction:nil];
         [b setTitle:titles[i] forState:UIControlStateNormal];
@@ -518,6 +518,7 @@ static NSString *WorkDir(void) {
             [tv scrollRangeToVisible:NSMakeRange(tv.text.length, 0)];
         });
     };
+    FPLog(@"안내: [복호화]는 설치 전에 FairPlayed 안에 포함한 앱만 처리합니다. 외부 IPA 선택은 검사 기능입니다.");
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ [FPRunner runEnvironment]; });
 }
 
