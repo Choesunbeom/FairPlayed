@@ -7,6 +7,7 @@ on:
       - '.github/workflows/build-unified-ios27.yml'
       - 'Packer/UnifiedMain.m'
       - 'Packer/Unified-Info.plist'
+      - 'Packer/Assets/**'
       - 'FairPlayed/FairPlayed/fpcore.*'
       - 'FairPlayed/FairPlayed/zipio.*'
 
@@ -57,6 +58,51 @@ jobs:
           file "$APP/FairPlayedPacker"
           plutil -lint "$APP/Info.plist"
 
+      - name: Compile real iOS AppIcon from the user-provided cat image
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$PWD/build/Payload/FairPlayedPacker.app"
+          CATALOG="$PWD/build/DaruAssets.xcassets/AppIcon.appiconset"
+          mkdir -p "$CATALOG"
+          swift Packer/Assets/make_daru_icon.swift Packer/Assets/daru-cat.png "$CATALOG/daru-icon.png"
+          cat > "$CATALOG/Contents.json" <<'JSON'
+          {
+            "images": [
+              { "filename": "daru-icon.png", "idiom": "universal", "platform": "ios", "size": "1024x1024" }
+            ],
+            "info": { "author": "xcode", "version": 1 }
+          }
+          JSON
+          xcrun --sdk iphoneos actool \
+            --compile "$APP" \
+            --platform iphoneos \
+            --minimum-deployment-target 17.0 \
+            --target-device iphone \
+            --target-device ipad \
+            --app-icon AppIcon \
+            --output-partial-info-plist "$PWD/build/AppIcon-Info.plist" \
+            "$PWD/build/DaruAssets.xcassets" \
+            2>&1 | tee icon-compile.log
+          python3 - <<'PY'
+          import plistlib
+          from pathlib import Path
+          path = Path("build/Payload/FairPlayedPacker.app/Info.plist")
+          with path.open("rb") as f:
+              info = plistlib.load(f)
+          with open("build/AppIcon-Info.plist", "rb") as f:
+              app_icons = plistlib.load(f)
+          if not app_icons.get("CFBundleIcons"):
+              raise SystemExit("actool produced no CFBundleIcons. Aborting.")
+          info.update(app_icons)
+          with path.open("wb") as f:
+              plistlib.dump(info, f, sort_keys=False)
+          print("App:", info["CFBundleDisplayName"])
+          print("Icon:", info["CFBundleIcons"])
+          PY
+          test -s "$APP/Assets.car"
+          plutil -lint "$APP/Info.plist"
+
       - name: Embed a reusable clean FairPlayed IPA template
         shell: bash
         run: |
@@ -87,5 +133,6 @@ jobs:
             FairPlayedUnified-iOS27.1-unsigned.ipa
             checksums.txt
             build-compile.log
+            icon-compile.log
           if-no-files-found: warn
           retention-days: 14
