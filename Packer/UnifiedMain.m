@@ -1087,7 +1087,8 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     if (![NSUserDefaults.standardUserDefaults boolForKey:@"DaruSelectionCleared"] &&
         [NSFileManager.defaultManager fileExistsAtPath:input]) self.lastIPA=input;
     NSString *generated=[DocsDir() stringByAppendingPathComponent:@"daru_재설치.ipa"];
-    if ([NSFileManager.defaultManager fileExistsAtPath:generated]) self.resultIPA=generated;
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"DaruSelectionCleared"] &&
+        [NSFileManager.defaultManager fileExistsAtPath:generated]) self.resultIPA=generated;
     NSString *storedReset=[NSUserDefaults.standardUserDefaults stringForKey:@"DaruAppearanceResetBundlePath"];
     self.appearanceResetBundlePath=storedReset;
     [self refresh];
@@ -1214,6 +1215,8 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
             self.lastIPA=nil;
             self.resultIPA=nil;
             [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"DaruSelectionCleared"];
+            // A previously generated package is no longer associated with a chosen IPA.
+            [NSFileManager.defaultManager removeItemAtPath:[DocsDir() stringByAppendingPathComponent:@"daru_재설치.ipa"] error:nil];
             self.packageStatus.text=@"선택을 취소했습니다. 다른 IPA를 선택해 주세요.";
             [self refresh];
             FPLog(@"[선택 취소] 이전 IPA 등록을 해제했습니다. 원본 파일은 삭제하지 않았습니다.");
@@ -1402,6 +1405,7 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
             if (ok) {
                 self.lastIPA=dest;
                 self.resultIPA=nil;
+                [fm removeItemAtPath:[DocsDir() stringByAppendingPathComponent:@"daru_재설치.ipa"] error:nil];
                 [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"DaruSelectionCleared"];
                 self.packageStatus.text=@"IPA 등록 완료. ② 서명용 IPA 만들기를 실행하세요.";
                 FPLog(@"[입력 완료] %@ (%.1f MB)",source.lastPathComponent,
