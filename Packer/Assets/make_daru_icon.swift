@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-// Turn the exact user-provided black-cat PNG into a 1024x1024 opaque iOS icon.
+// Turn the exact user-provided black-cat PNG into a 1024x1024 filled iOS icon.
 // Do not redraw or replace the artwork; the iPhone system supplies the icon mask.
 guard CommandLine.arguments.count == 3 else {
     fatalError("Usage: swift make_icon.swift input.png output.png")
@@ -13,7 +13,7 @@ guard let icon = NSImage(contentsOfFile: source) else {
 }
 let size = 1024
 let image = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size,
-                             bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false,
+                             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
                              isPlanar: false, colorSpaceName: .deviceRGB,
                              bytesPerRow: 0, bitsPerPixel: 0)!
 let context = NSGraphicsContext(bitmapImageRep: image)!
