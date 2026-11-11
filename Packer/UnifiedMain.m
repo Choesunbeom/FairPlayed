@@ -410,6 +410,12 @@ static NSString *WorkDir(void) {
 // Every encrypted Mach-O is decrypted from its in-bundle path (where fairplayd can read it and its SC_Info),
 // written into a container copy of the app, and the result is zipped into Documents/Decrypted/<name>-decrypted.ipa.
 + (void)embeddedExport {
+    // Clear the previous run before starting: an old EXPERIMENTAL result must
+    // never trigger a new success notification.
+    NSUserDefaults *exportState=NSUserDefaults.standardUserDefaults;
+    [exportState removeObjectForKey:@"DaruLastExportPath"];
+    [exportState removeObjectForKey:@"DaruLastExportStatus"];
+    [exportState removeObjectForKey:@"DaruLastExportTentative"];
     // The kernel FairPlay service cannot read a guest app under LiveContainer's
     // data container, regardless of whether the embedded app's SINF exists.
     NSString *bundle = NSBundle.mainBundle.bundlePath.stringByStandardizingPath;
@@ -454,6 +460,16 @@ static NSString *WorkDir(void) {
         char zerr[512] = {0};
         int zr = zip_create_from_dir(work.fileSystemRepresentation, ipa.fileSystemRepresentation, zerr, sizeof zerr);
         [fm removeItemAtPath:work error:nil];
+        if (zr == 0) {
+            [exportState setObject:ipa forKey:@"DaruLastExportPath"];
+            [exportState setObject:(fail ? @"PARTIAL" : tentative ? @"EXPERIMENTAL" : @"SUCCESS")
+                            forKey:@"DaruLastExportStatus"];
+            [exportState setInteger:(NSInteger)tentative forKey:@"DaruLastExportTentative"];
+            FPLog(@"[내보내기 상태] %@ · 실패 %d개 · 실험 판정 %u개", fail ? @"PARTIAL" : tentative ? @"EXPERIMENTAL" : @"SUCCESS", fail, tentative);
+        } else {
+            [fm removeItemAtPath:ipa error:nil];
+            FPLog(@"[내보내기 실패] 파일 압축을 완료하지 못했습니다: %s", zerr);
+        }
         FPLog(@"=== %@: %d decrypted, %d not encrypted, %d failed, %u experimental%@; %@ ===", name, dec, plain, fail, tentative,
               fail ? [NSString stringWithFormat:@" (%@)", [failed componentsJoinedByString:@", "]] : @"",
               zr == 0 ? [@"wrote " stringByAppendingString:ipa.lastPathComponent] : [NSString stringWithFormat:@"zip failed: %s", zerr]);
@@ -941,7 +957,8 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
 - (BOOL)hasCompleteResult {
     NSString *dir=[DocsDir() stringByAppendingPathComponent:@"Decrypted"];
     for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil]) {
-        if ([[name lowercaseString] hasSuffix:@"-decrypted.ipa"] && ![[name lowercaseString] containsString:@"partial"]) return YES;
+        NSString *lowercase=[name lowercaseString];
+        if ([lowercase hasSuffix:@"-decrypted.ipa"] || [lowercase hasSuffix:@"-experimental.ipa"]) return YES;
     }
     return NO;
 }
