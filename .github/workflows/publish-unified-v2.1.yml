@@ -1,0 +1,58 @@
+name: Publish FairPlayed Unified v2.1 IPA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/publish-unified-v2.1.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN_ID: "42928136970"
+      IPA_FILE: "FairPlayed-Unified-v2.1-unsigned.ipa"
+      RELEASE_TAG: "unified-v2.1"
+    steps:
+      - name: Download previously verified Xcode 27.1 build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/input"
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "FairPlayedUnified-iOS27.1-unsigned" \
+            --dir "$RUNNER_TEMP/input"
+          mv "$RUNNER_TEMP/input/FairPlayedUnified-iOS27.1-unsigned.ipa" "$RUNNER_TEMP/$IPA_FILE"
+
+      - name: Verify packaged IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -t "$RUNNER_TEMP/$IPA_FILE" | tail -1
+          unzip -Z -1 "$RUNNER_TEMP/$IPA_FILE" | grep -Fx 'Payload/FairPlayedPacker.app/FairPlayedPacker'
+          unzip -Z -1 "$RUNNER_TEMP/$IPA_FILE" | grep -Fx 'Payload/FairPlayedPacker.app/FairPlayed-base-template.ipa'
+          unzip -p "$RUNNER_TEMP/$IPA_FILE" Payload/FairPlayedPacker.app/Info.plist | grep -q '<string>2.1</string>'
+          sha256sum "$RUNNER_TEMP/$IPA_FILE"
+
+      - name: Publish public download with a stable URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/$IPA_FILE" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" \
+              "$RUNNER_TEMP/$IPA_FILE" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "e56e250c2e64f9d41b8cad42393edcb993c2f51a" \
+              --title "FairPlayed 통합 v2.1 — iOS 27.1 SDK" \
+              --notes "아이폰 전용 통합 패커 및 실험용 복호화 엔진. Xcode 27.1 / iOS 27.1 SDK로 컴파일된 ARM64 미서명 IPA입니다. SideStore로 직접 서명·설치하세요. LiveContainer 게스트 환경에서는 FairPlay 복호화가 작동하지 않습니다. iOS 27.2.1에서 복호화 성공 여부는 확인되지 않았습니다."
+          fi
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json url,assets
