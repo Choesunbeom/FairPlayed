@@ -915,7 +915,7 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     self.busy=YES;
     [self.spinner startAnimating];
     [self refresh];
-    dispatch_async(dispatch_get_global_queue(QOS_CLASSUSER_INITIATED,0),^{
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
         work();
         dispatch_async(dispatch_get_main_queue(),^{
             self.busy=NO;
