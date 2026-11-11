@@ -635,30 +635,8 @@ static NSString *FPPack(NSString *base, NSString *target, NSString **details, NS
     return nil;
 }
 
-// iOS app bundles are immutable. Prepare a clean unsigned replacement from the
-// resource created BEFORE adding EmbeddedPayload; only SideStore can install it.
-static NSString *DaruPrepareCleanRestore(NSError **error) {
-    NSFileManager *fm=NSFileManager.defaultManager;
-    NSString *base=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"FairPlayed-base-template.ipa"];
-    NSString *output=[DocsDir() stringByAppendingPathComponent:@"daru_순정복원.ipa"];
-    NSString *temporary=[output stringByAppendingString:@".writing"];
-    if (![fm fileExistsAtPath:base]) {
-        if (error) *error=[NSError errorWithDomain:@"daru" code:200 userInfo:@{
-            NSLocalizedDescriptionKey:@"내장된 순정 daru IPA 템플릿이 없습니다."}];
-        return nil;
-    }
-    [fm removeItemAtPath:temporary error:nil];
-    if (![fm copyItemAtPath:base toPath:temporary error:error]) return nil;
-    [fm removeItemAtPath:output error:nil];
-    if (![fm moveItemAtPath:temporary toPath:output error:error]) {
-        [fm removeItemAtPath:temporary error:nil];
-        return nil;
-    }
-    return output;
-}
-
-// Remove ONLY daru-created working inputs. Never remove files placed by the user
-// in their shared Documents folder and never delete a decrypted result.
+// Only remove daru-generated working copies; NEVER touch the installed,
+// code-signed EmbeddedPayload (read-only), the user's original IPA, or Decrypted/.
 static void DaruCleanupGeneratedInputs(void) {
     NSFileManager *fm=NSFileManager.defaultManager;
     for (NSString *file in @[@"Encrypted-input.ipa", @"daru_재설치.ipa",
@@ -818,6 +796,7 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
 @property(nonatomic,strong) UILabel *decryptStatus;
 @property(nonatomic,strong) UILabel *logSummary;
 @property(nonatomic,strong) UIButton *generateButton;
+@property(nonatomic,strong) UIButton *cancelSelectionButton;
 @property(nonatomic,strong) UIButton *sharePackageButton;
 @property(nonatomic,strong) UIButton *decryptButton;
 @property(nonatomic,strong) UISwitch *stubModeSwitch;
@@ -829,6 +808,7 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
 @property(nonatomic,strong) NSString *lastIPA;
 @property(nonatomic,strong) NSString *resultIPA;
 @property(nonatomic,assign) BOOL busy;
+@property(nonatomic,copy) NSString *appearanceResetBundlePath;
 @end
 
 @implementation FPWorkspace
@@ -946,7 +926,13 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     [v.heightAnchor constraintEqualToConstant:height].active=YES;
     return v;
 }
+- (BOOL)isVisuallyReset {
+    // The marker applies ONLY to this exact installation. SideStore installing
+    // another signed bundle (even the same Bundle ID) gives a new bundle path.
+    return [self.appearanceResetBundlePath isEqualToString:NSBundle.mainBundle.bundlePath.stringByStandardizingPath];
+}
 - (BOOL)hasEmbeddedTarget {
+    if ([self isVisuallyReset]) return NO;
     NSString *root=[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"EmbeddedPayload"];
     for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:root error:nil]) {
         NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[[root stringByAppendingPathComponent:name] stringByAppendingPathComponent:@"Info.plist"]];
@@ -997,6 +983,8 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     self.inputLabel=[self label:@"선택된 파일 없음" size:13 strong:NO];
     self.inputLabel.textColor=UIColor.secondaryLabelColor;
     [fileCard addArrangedSubview:self.inputLabel];
+    self.cancelSelectionButton=[self button:@"선택 취소" symbol:@"xmark.circle" tag:18 primary:NO];
+    [fileCard addArrangedSubview:self.cancelSelectionButton];
     [pack addArrangedSubview:fileCard];
 
     UIStackView *working=[self stack];
@@ -1097,11 +1085,13 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
         [NSFileManager.defaultManager fileExistsAtPath:input]) self.lastIPA=input;
     NSString *generated=[DocsDir() stringByAppendingPathComponent:@"daru_재설치.ipa"];
     if ([NSFileManager.defaultManager fileExistsAtPath:generated]) self.resultIPA=generated;
+    NSString *storedReset=[NSUserDefaults.standardUserDefaults stringForKey:@"DaruAppearanceResetBundlePath"];
+    self.appearanceResetBundlePath=storedReset;
     [self refresh];
     NSString *readme=[DocsDir() stringByAppendingPathComponent:@"IPA를 이 폴더에 복사하세요.txt"];
     if (![NSFileManager.defaultManager fileExistsAtPath:readme])
         [@"파일 앱 → 나의 iPhone → daru 폴더에 .ipa 파일을 복사하세요. daru 앱의 'daru 폴더의 IPA 선택' 버튼으로 가져올 수 있습니다.\n" writeToFile:readme atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    FPLog(@"daru 2.5 · 기본 IPA 선택기는 daru 자체 목록을 사용합니다 (iOS 최근 항목 우회).");
+    FPLog(@"daru 2.6 · IPA 선택 취소, EXPERIMENTAL 완료 알림, 완료 후 화면 초기화.");
     if (FPRunningAsLiveContainerGuest())
         FPLog(@"[환경 주의] LiveContainer 안에서는 FairPlay 복호화가 불가능합니다. SideStore 직접 설치하세요.");
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{[FPRunner runEnvironment];});
@@ -1110,11 +1100,13 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     BOOL guest=FPRunningAsLiveContainerGuest();
     BOOL embedded=[self hasEmbeddedTarget];
     self.generateButton.enabled=!self.busy && self.lastIPA.length>0;
+    self.cancelSelectionButton.enabled=!self.busy && self.lastIPA.length>0;
     self.sharePackageButton.enabled=!self.busy && self.resultIPA.length>0 && [NSFileManager.defaultManager fileExistsAtPath:self.resultIPA];
     self.decryptButton.enabled=!self.busy && embedded && !guest;
-    self.shareResultButton.enabled=!self.busy && [self resultFiles].count>0;
+    self.shareResultButton.enabled=!self.busy && ![self isVisuallyReset] && [self resultFiles].count>0;
     self.inputLabel.text=self.lastIPA ? [NSString stringWithFormat:@"✓ %@ (%.1f MB)",self.lastIPA.lastPathComponent,[[NSFileManager.defaultManager attributesOfItemAtPath:self.lastIPA error:nil] fileSize]/1048576.0] : @"선택된 IPA 없음";
-    if (guest) self.decryptStatus.text=@"LiveContainer 내부 실행 중: 복호화 불가. SideStore로 독립 설치하세요.";
+    if ([self isVisuallyReset]) self.decryptStatus.text=@"내장된 앱이 없습니다. 새 IPA를 선택해 주세요.";
+    else if (guest) self.decryptStatus.text=@"LiveContainer 내부 실행 중: 복호화 불가. SideStore로 독립 설치하세요.";
     else if (embedded) self.decryptStatus.text=@"설치된 앱에 암호화 대상이 포함되어 있습니다. 아래 버튼으로 복호화를 시도하세요.";
     else self.decryptStatus.text=@"내장된 대상 앱 없음. 패키징 → 공유 → SideStore 재설치 후 돌아오세요.";
 }
@@ -1150,6 +1142,18 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
             UINavigationController *navigation=[[UINavigationController alloc] initWithRootViewController:browser];
             navigation.modalPresentationStyle=UIModalPresentationFullScreen;
             [self presentViewController:navigation animated:YES completion:nil];
+            break;
+        }
+        case 18: {
+            if (self.busy || !self.lastIPA) return;
+            // Clear the *selection*, not the file the user originally copied.
+            // This lets the same IPA be selected again or a different one chosen.
+            self.lastIPA=nil;
+            self.resultIPA=nil;
+            [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"DaruSelectionCleared"];
+            self.packageStatus.text=@"선택을 취소했습니다. 다른 IPA를 선택해 주세요.";
+            [self refresh];
+            FPLog(@"[선택 취소] 이전 IPA 등록을 해제했습니다. 원본 파일은 삭제하지 않았습니다.");
             break;
         }
         case 17: {
