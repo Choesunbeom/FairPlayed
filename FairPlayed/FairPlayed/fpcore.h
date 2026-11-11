@@ -50,3 +50,8 @@ int  fp_probe_file(const char *path, const int *modes, int nmodes, fp_log_t log,
 // Decrypt in_path -> out_path. Returns 0 on success, 1 if file was not encrypted (copied as-is), -1 on failure.
 int  fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, void *ctx);
 bool fp_is_macho(const char *path);
+// Optional research mode: accepts near-zero single-page FairPlay output with no ARM64 RET.
+// Experimental output is marked separately; do not label it verified decrypted.
+void fp_set_tiny_stub_mode(bool enabled);
+void fp_reset_tiny_stub_count(void);
+unsigned fp_tiny_stub_count(void);
