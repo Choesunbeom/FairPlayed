@@ -410,6 +410,16 @@ static NSString *WorkDir(void) {
 // Every encrypted Mach-O is decrypted from its in-bundle path (where fairplayd can read it and its SC_Info),
 // written into a container copy of the app, and the result is zipped into Documents/Decrypted/<name>-decrypted.ipa.
 + (void)embeddedExport {
+    // The kernel FairPlay service cannot read a guest app under LiveContainer's
+    // data container, regardless of whether the embedded app's SINF exists.
+    NSString *bundle = NSBundle.mainBundle.bundlePath.stringByStandardizingPath;
+    if ([bundle containsString:@"/Documents/Applications/"]) {
+        FPLog(@"[환경 오류] FairPlayed가 LiveContainer 안에서 실행 중입니다.");
+        FPLog(@"암호화된 IPA를 포함한 FairPlayed-target-unsigned.ipa를 SideStore로 *독립 설치*한 뒤 홈 화면에서 실행하세요.");
+        FPLog(@"현재 경로: %@", bundle);
+        FPLog(@"LiveContainer 내부에서는 FairPlay 접근이 불가능하여 복호화 대신 PARTIAL 파일만 생성됩니다. 작업을 중단합니다.");
+        return;
+    }
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *root = [self embeddedRoot];
     for (NSString *name in [fm contentsOfDirectoryAtPath:root error:nil]) @autoreleasepool {
@@ -606,6 +616,13 @@ static NSString *FPPack(NSString *base, NSString *target, NSString **details, NS
 }
 
 
+// FairPlayed's FairPlay service lookup requires a genuinely installed app bundle.
+// LiveContainer runs guest apps from Documents/Applications inside its own data container.
+static BOOL FPRunningAsLiveContainerGuest(void) {
+    NSString *bundle = NSBundle.mainBundle.bundlePath.stringByStandardizingPath;
+    return [bundle containsString:@"/Documents/Applications/"];
+}
+
 #pragma mark - Unified on-device interface
 
 @interface FPViewController : UIViewController <UIDocumentPickerDelegate>
@@ -721,15 +738,22 @@ static NSString *FPPack(NSString *base, NSString *target, NSString **details, NS
     [self refreshState];
     FPLog(@"FairPlayed 통합 패커 실행. 복호화 엔진: 원본 FairPlayed.");
     FPLog(@"내장 페이로드 상태: %@", [self hasEmbeddedTarget] ? @"있음 — 복호화 가능성 검사" : @"없음 — 먼저 IPA 생성/재서명/재설치 필요");
+    if (FPRunningAsLiveContainerGuest()) {
+        FPLog(@"[중요] 이 앱은 LiveContainer의 게스트로 구동 중입니다. FairPlay 복호화는 여기서 불가능합니다.");
+        FPLog(@"'② 서명용 IPA 만들기'로 생성한 파일을 SideStore에서 직접 설치하고 홈 화면에서 실행하세요.");
+    }
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ [FPRunner runEnvironment]; });
 }
 - (void)refreshState {
     BOOL hasEmbedded = [self hasEmbeddedTarget];
-    self.stateLabel.text = hasEmbedded
-        ? @"내장 대상 앱 발견: '③ 내장 앱 복호화'를 눌러 시험하세요."
-        : @"기본 패커 모드: 암호화된 IPA를 선택하고 재서명용 파일을 만드세요.";
+    BOOL guest = FPRunningAsLiveContainerGuest();
+    self.stateLabel.text = guest
+        ? @"LiveContainer 내부 실행 감지: IPA 생성은 가능하지만 복호화할 수 없습니다. 생성된 IPA를 SideStore로 직접 설치하세요."
+        : hasEmbedded
+            ? @"정식 설치된 앱에서 대상 파일 발견: '③ 내장 앱 복호화'로 시험하세요."
+            : @"기본 패커 모드: 암호화된 IPA를 선택해 서명용 파일을 만드세요.";
     self.packButton.enabled = !self.busy && self.lastIPA != nil;
-    self.decryptButton.enabled = !self.busy && hasEmbedded;
+    self.decryptButton.enabled = !self.busy && hasEmbedded && !guest;
     self.shareButton.enabled = !self.busy;
 }
 - (void)setBusyUI:(BOOL)busy {
@@ -777,6 +801,10 @@ static NSString *FPPack(NSString *base, NSString *target, NSString **details, NS
         }
         case 2: {
             if (self.busy || ![self hasEmbeddedTarget]) return;
+            if (FPRunningAsLiveContainerGuest()) {
+                FPLog(@"LiveContainer 내부에서는 복호화가 차단됩니다. SideStore로 독립 설치해 주세요.");
+                return;
+            }
             [self background:^{
                 FPLog(@"내장 앱 복호화 시작 (iOS 27.2.1에서는 실험적)");
                 [FPRunner logEnvironment];
