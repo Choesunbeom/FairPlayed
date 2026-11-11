@@ -1108,10 +1108,28 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     self.decryptButton.enabled=!self.busy && embedded && !guest;
     self.shareResultButton.enabled=!self.busy && ![self isVisuallyReset] && [self resultFiles].count>0;
     self.inputLabel.text=self.lastIPA ? [NSString stringWithFormat:@"✓ %@ (%.1f MB)",self.lastIPA.lastPathComponent,[[NSFileManager.defaultManager attributesOfItemAtPath:self.lastIPA error:nil] fileSize]/1048576.0] : @"선택된 IPA 없음";
-    if ([self isVisuallyReset]) self.decryptStatus.text=@"내장된 앱이 없습니다. 새 IPA를 선택해 주세요.";
-    else if (guest) self.decryptStatus.text=@"LiveContainer 내부 실행 중: 복호화 불가. SideStore로 독립 설치하세요.";
-    else if (embedded) self.decryptStatus.text=@"설치된 앱에 암호화 대상이 포함되어 있습니다. 아래 버튼으로 복호화를 시도하세요.";
-    else self.decryptStatus.text=@"내장된 대상 앱 없음. 패키징 → 공유 → SideStore 재설치 후 돌아오세요.";
+    if ([self isVisuallyReset]) {
+        self.decryptStatus.text=@"내장된 앱이 없습니다. 새 IPA를 선택해 주세요.";
+    } else if (guest) {
+        self.decryptStatus.text=@"LiveContainer 내부 실행 중: 복호화 불가. SideStore로 독립 설치하세요.";
+    } else if (embedded) {
+        NSUserDefaults *state=NSUserDefaults.standardUserDefaults;
+        NSString *result=[state stringForKey:@"DaruLastExportPath"];
+        NSString *status=[state stringForKey:@"DaruLastExportStatus"];
+        NSString *sourceBundle=[state stringForKey:@"DaruLastExportBundlePath"];
+        BOOL current=[sourceBundle isEqualToString:NSBundle.mainBundle.bundlePath.stringByStandardizingPath];
+        if (current && result.length && [NSFileManager.defaultManager fileExistsAtPath:result] &&
+            [status isEqualToString:@"EXPERIMENTAL"]) {
+            self.decryptStatus.text=@"EXPERIMENTAL IPA 생성 성공! ⑤에서 결과를 내보내면 daru 화면이 초기화됩니다.";
+        } else if (current && result.length && [NSFileManager.defaultManager fileExistsAtPath:result] &&
+                   [status isEqualToString:@"SUCCESS"]) {
+            self.decryptStatus.text=@"복호화 결과 IPA 생성 성공! ⑤에서 내보내세요.";
+        } else {
+            self.decryptStatus.text=@"설치된 앱에 암호화 대상이 포함되어 있습니다. 아래 버튼으로 복호화를 시도하세요.";
+        }
+    } else {
+        self.decryptStatus.text=@"내장된 앱이 없습니다. 새 IPA를 선택해 주세요.";
+    }
 }
 - (void)working:(dispatch_block_t)work {
     self.busy=YES;
