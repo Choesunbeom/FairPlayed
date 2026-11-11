@@ -639,8 +639,8 @@ static NSString *FPPack(NSString *base, NSString *target, NSString **details, NS
 // code-signed EmbeddedPayload (read-only), the user's original IPA, or Decrypted/.
 static void DaruCleanupGeneratedInputs(void) {
     NSFileManager *fm=NSFileManager.defaultManager;
-    for (NSString *file in @[@"Encrypted-input.ipa", @"daru_재설치.ipa",
-                             @"FairPlayed-target-unsigned.ipa", @"Encrypted-input.ipa.incoming"]) {
+    for (NSString *file in @[@"daru_재설치.ipa", @"FairPlayed-target-unsigned.ipa",
+                             @"Encrypted-input.ipa.incoming"]) {
         NSString *path=[DocsDir() stringByAppendingPathComponent:file];
         if ([fm fileExistsAtPath:path]) {
             NSError *error=nil;
@@ -1123,11 +1123,53 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
         });
     });
 }
-- (void)sharePaths:(NSArray<NSURL *> *)urls from:(UIView *)sender {
+- (void)markCompletedAndResetAppearance {
+    // Deliberately VISUAL ONLY: the signed EmbeddedPayload stays unchanged.
+    // A new SideStore installation changes the bundle path and resets the marker.
+    NSString *bundle=NSBundle.mainBundle.bundlePath.stringByStandardizingPath;
+    self.appearanceResetBundlePath=bundle;
+    [NSUserDefaults.standardUserDefaults setObject:bundle forKey:@"DaruAppearanceResetBundlePath"];
+    [self displayResetCleanup];
+}
+- (void)displayResetCleanup {
+    // The generated input copy/output can be cleaned, but never the decryption
+    // result IPA, user's original file or the read-only signed app bundle.
+    DaruCleanupGeneratedInputs();
+    self.lastIPA=nil;
+    self.resultIPA=nil;
+    self.stubModeSwitch.on=NO;
+    self.packageStatus.text=@"초기 상태입니다. 새 IPA를 선택해 주세요.";
+    self.selectedIndex=0;
+    [self refresh];
+    FPLog(@"[작업 완료] daru 화면 초기화. 내장된 앱은 표시되지 않으며, 복호화 결과 IPA는 파일 앱에 보관됩니다.");
+    UIAlertController *done=[UIAlertController alertControllerWithTitle:@"내보내기 완료"
+        message:@"daru가 초기 화면으로 돌아왔습니다. 복호화 화면에는 '내장된 앱이 없습니다'라고 표시됩니다. 실제 서명된 앱 번들에는 이전 대상 파일이 남아 있으나 화면에서만 숨김 처리됩니다."
+        preferredStyle:UIAlertControllerStyleAlert];
+    [done addAction:[UIAlertAction actionWithTitle:@"확인" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:done animated:YES completion:nil];
+}
+- (void)sharePaths:(NSArray<NSURL *> *)urls from:(UIView *)sender onSuccess:(void (^)(void))onSuccess {
     if (!urls.count) { FPLog(@"공유할 파일이 없습니다."); return; }
     UIActivityViewController *share=[[UIActivityViewController alloc] initWithActivityItems:urls applicationActivities:nil];
     share.popoverPresentationController.sourceView=sender;
+    if (onSuccess) {
+        __weak typeof(self) weakSelf=self;
+        share.completionWithItemsHandler=^(UIActivityType type, BOOL completed, NSArray *returnedItems, NSError *activityError) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (activityError) FPLog(@"[IPA 내보내기 오류] %@",activityError.localizedDescription);
+                if (!completed || activityError) {
+                    FPLog(@"[IPA 내보내기] 취소되거나 실패하여 daru 화면을 유지합니다.");
+                    return;
+                }
+                FPLog(@"[IPA 내보내기] 공유 성공. 화면 초기화를 진행합니다.");
+                if (weakSelf) onSuccess();
+            });
+        };
+    }
     [self.selectedViewController presentViewController:share animated:YES completion:nil];
+}
+- (void)sharePaths:(NSArray<NSURL *> *)urls from:(UIView *)sender {
+    [self sharePaths:urls from:sender onSuccess:nil];
 }
 - (void)tap:(UIButton *)sender {
     switch (sender.tag) {
