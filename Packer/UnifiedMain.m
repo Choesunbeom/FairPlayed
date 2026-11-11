@@ -416,6 +416,7 @@ static NSString *WorkDir(void) {
     [exportState removeObjectForKey:@"DaruLastExportPath"];
     [exportState removeObjectForKey:@"DaruLastExportStatus"];
     [exportState removeObjectForKey:@"DaruLastExportTentative"];
+    [exportState removeObjectForKey:@"DaruLastExportBundlePath"];
     // The kernel FairPlay service cannot read a guest app under LiveContainer's
     // data container, regardless of whether the embedded app's SINF exists.
     NSString *bundle = NSBundle.mainBundle.bundlePath.stringByStandardizingPath;
@@ -465,6 +466,8 @@ static NSString *WorkDir(void) {
             [exportState setObject:(fail ? @"PARTIAL" : tentative ? @"EXPERIMENTAL" : @"SUCCESS")
                             forKey:@"DaruLastExportStatus"];
             [exportState setInteger:(NSInteger)tentative forKey:@"DaruLastExportTentative"];
+            [exportState setObject:NSBundle.mainBundle.bundlePath.stringByStandardizingPath
+                           forKey:@"DaruLastExportBundlePath"];
             FPLog(@"[내보내기 상태] %@ · 실패 %d개 · 실험 판정 %u개", fail ? @"PARTIAL" : tentative ? @"EXPERIMENTAL" : @"SUCCESS", fail, tentative);
         } else {
             [fm removeItemAtPath:ipa error:nil];
@@ -1267,27 +1270,69 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
                 [FPRunner logEnvironment];
                 [FPRunner embeddedExport];
                 fp_set_tiny_stub_mode(false);
-                NSArray *results=[self resultFiles];
-                BOOL complete=[self hasCompleteResult];
-                FPLog(complete ? @"[복호화] 결과 IPA 발견. 로그를 검토하세요." :
-                      @"[복호화 경고] 완전 복호화된 IPA가 없습니다. PARTIAL IPA는 설치하지 마세요.");
+                NSUserDefaults *state=NSUserDefaults.standardUserDefaults;
+                NSString *output=[state stringForKey:@"DaruLastExportPath"];
+                NSString *status=[state stringForKey:@"DaruLastExportStatus"];
+                NSString *sourceBundle=[state stringForKey:@"DaruLastExportBundlePath"];
+                BOOL matchesInstall=[sourceBundle isEqualToString:NSBundle.mainBundle.bundlePath.stringByStandardizingPath];
+                BOOL outputExists=output.length && [NSFileManager.defaultManager fileExistsAtPath:output];
+                BOOL finished=outputExists && matchesInstall &&
+                             ([status isEqualToString:@"EXPERIMENTAL"] || [status isEqualToString:@"SUCCESS"]);
+                FPLog(finished ? @"[복호화] 이번 작업의 결과 IPA가 생성되었습니다. ⑤에서 내보내세요." :
+                      @"[복호화 경고] 이번 작업에서 성공한 IPA가 확인되지 않았습니다. 로그를 확인하세요.");
                 dispatch_async(dispatch_get_main_queue(),^{
-                    self.decryptStatus.text=complete ? @"완료된 IPA가 있습니다. 로그 검증 후 ⑤에서 공유하세요." :
-                                                     @"완전 복호화 실패: 로그에서 실패한 프레임워크를 확인하세요.";
-                    self.shareResultButton.enabled=results.count>0;
+                    if (finished && [status isEqualToString:@"EXPERIMENTAL"]) {
+                        self.decryptStatus.text=@"EXPERIMENTAL IPA 생성 성공! ⑤에서 내보내면 daru 화면이 초기화됩니다.";
+                        UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"복호화 성공 · EXPERIMENTAL"
+                            message:@"EXPERIMENTAL IPA 생성에 성공했습니다. 이 형식은 사용자 환경에서 LiveContainer 실행이 확인됐지만, 모든 앱의 복호화가 검증된 것은 아닙니다. ⑤에서 결과를 내보내면 daru가 초기 화면으로 돌아갑니다."
+                            preferredStyle:UIAlertControllerStyleAlert];
+                        [alert addAction:[UIAlertAction actionWithTitle:@"확인" style:UIAlertActionStyleDefault handler:nil]];
+                        [self.selectedViewController presentViewController:alert animated:YES completion:nil];
+                    } else if (finished) {
+                        self.decryptStatus.text=@"복호화 결과 IPA 생성 성공! ⑤에서 내보내면 daru 화면이 초기화됩니다.";
+                        UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"IPA 생성 성공"
+                            message:@"복호화 결과를 생성했습니다. ⑤에서 결과를 내보내면 daru가 초기 화면으로 돌아갑니다."
+                            preferredStyle:UIAlertControllerStyleAlert];
+                        [alert addAction:[UIAlertAction actionWithTitle:@"확인" style:UIAlertActionStyleDefault handler:nil]];
+                        [self.selectedViewController presentViewController:alert animated:YES completion:nil];
+                    } else {
+                        self.decryptStatus.text=[status isEqualToString:@"PARTIAL"]
+                            ? @"PARTIAL: 일부 바이너리 복호화에 실패했습니다. 로그를 확인하세요."
+                            : @"복호화 결과를 생성하지 못했습니다. 로그에서 오류를 확인하세요.";
+                    }
+                    self.shareResultButton.enabled=outputExists;
                 });
             }];
             break;
         }
         case 14: {
-            NSArray<NSURL *> *result=[self resultFiles];
+            if (self.busy || [self isVisuallyReset]) return;
+            NSUserDefaults *state=NSUserDefaults.standardUserDefaults;
+            NSString *last=[state stringForKey:@"DaruLastExportPath"];
+            NSString *status=[state stringForKey:@"DaruLastExportStatus"];
+            NSString *sourceBundle=[state stringForKey:@"DaruLastExportBundlePath"];
+            BOOL isCurrent=[sourceBundle isEqualToString:NSBundle.mainBundle.bundlePath.stringByStandardizingPath];
+            BOOL exists=last.length && [NSFileManager.defaultManager fileExistsAtPath:last];
+            NSArray<NSURL *> *result=(exists && isCurrent) ? @[[NSURL fileURLWithPath:last]] : [self resultFiles];
             if (!result.count) { FPLog(@"아직 복호화 결과 IPA가 없습니다."); return; }
-            if (![self hasCompleteResult]) {
-                UIAlertController *warning=[UIAlertController alertControllerWithTitle:@"부분 복호화 파일" message:@"이 파일은 PARTIAL 또는 EXPERIMENTAL 상태로, 완전한 복호화가 검증되지 않았습니다. LiveContainer 실행에 실패할 수 있습니다. 진단 목적으로 공유하시겠습니까?" preferredStyle:UIAlertControllerStyleAlert];
+            BOOL succeeded=isCurrent && exists &&
+                ([status isEqualToString:@"SUCCESS"] || [status isEqualToString:@"EXPERIMENTAL"]);
+            if (succeeded) {
+                // Only a successfully exported result triggers the clean-looking
+                // UI reset. Cancelled share sheets never reset or remove IPA data.
+                [self sharePaths:result from:sender onSuccess:^{
+                    [self markCompletedAndResetAppearance];
+                }];
+            } else {
+                UIAlertController *warning=[UIAlertController alertControllerWithTitle:@"부분 복호화 파일"
+                    message:@"이번 설치에서 검증된 결과가 아니거나 PARTIAL 상태입니다. 연구·진단 용도로만 공유할 수 있으며 daru 화면은 초기화되지 않습니다."
+                    preferredStyle:UIAlertControllerStyleAlert];
                 [warning addAction:[UIAlertAction actionWithTitle:@"취소" style:UIAlertActionStyleCancel handler:nil]];
-                [warning addAction:[UIAlertAction actionWithTitle:@"파일 공유" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){[self sharePaths:result from:sender];}]];
+                [warning addAction:[UIAlertAction actionWithTitle:@"파일 공유" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
+                    [self sharePaths:result from:sender];
+                }]];
                 [self.selectedViewController presentViewController:warning animated:YES completion:nil];
-            } else [self sharePaths:result from:sender];
+            }
             break;
         }
         case 15: self.selectedIndex=2; break;
