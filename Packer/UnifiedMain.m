@@ -556,7 +556,7 @@ static NSString *FPPack(NSString *base, NSString *target, NSString **details, NS
     NSString *scratch = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSUUID.UUID UUIDString]];
     NSString *baseDir = [scratch stringByAppendingPathComponent:@"Base"];
     NSString *appDir = [scratch stringByAppendingPathComponent:@"Target"];
-    NSString *output = [FPDocuments() stringByAppendingPathComponent:@"FairPlayed-target-unsigned.ipa"];
+    NSString *output = [FPDocuments() stringByAppendingPathComponent:@"daru_재설치.ipa"];
     NSString *partial = [scratch stringByAppendingPathComponent:@"Result.ipa"];
     char zerr[1024] = {0};
     NSString *fail = nil;
@@ -617,6 +617,44 @@ static NSString *FPPack(NSString *base, NSString *target, NSString **details, NS
     [fm removeItemAtPath:scratch error:nil];
     if (fail && error) *error = [NSError errorWithDomain:@"FairPlayedPacker" code:2 userInfo:@{NSLocalizedDescriptionKey:fail}];
     return nil;
+}
+
+// iOS app bundles are immutable. Prepare a clean unsigned replacement from the
+// resource created BEFORE adding EmbeddedPayload; only SideStore can install it.
+static NSString *DaruPrepareCleanRestore(NSError **error) {
+    NSFileManager *fm=NSFileManager.defaultManager;
+    NSString *base=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"FairPlayed-base-template.ipa"];
+    NSString *output=[DocsDir() stringByAppendingPathComponent:@"daru_순정복원.ipa"];
+    NSString *temporary=[output stringByAppendingString:@".writing"];
+    if (![fm fileExistsAtPath:base]) {
+        if (error) *error=[NSError errorWithDomain:@"daru" code:200 userInfo:@{
+            NSLocalizedDescriptionKey:@"내장된 순정 daru IPA 템플릿이 없습니다."}];
+        return nil;
+    }
+    [fm removeItemAtPath:temporary error:nil];
+    if (![fm copyItemAtPath:base toPath:temporary error:error]) return nil;
+    [fm removeItemAtPath:output error:nil];
+    if (![fm moveItemAtPath:temporary toPath:output error:error]) {
+        [fm removeItemAtPath:temporary error:nil];
+        return nil;
+    }
+    return output;
+}
+
+// Remove ONLY daru-created working inputs. Never remove files placed by the user
+// in their shared Documents folder and never delete a decrypted result.
+static void DaruCleanupGeneratedInputs(void) {
+    NSFileManager *fm=NSFileManager.defaultManager;
+    for (NSString *file in @[@"Encrypted-input.ipa", @"daru_재설치.ipa",
+                             @"FairPlayed-target-unsigned.ipa", @"Encrypted-input.ipa.incoming"]) {
+        NSString *path=[DocsDir() stringByAppendingPathComponent:file];
+        if ([fm fileExistsAtPath:path]) {
+            NSError *error=nil;
+            if ([fm removeItemAtPath:path error:&error]) FPLog(@"[자동 정리] 임시 파일 제거: %@",file);
+            else FPLog(@"[자동 정리] %@ 삭제 실패: %@",file,error.localizedDescription);
+        }
+    }
+    [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"DaruSelectionCleared"];
 }
 
 
@@ -703,7 +741,7 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
             NSArray<NSString *> *names=[fm contentsOfDirectoryAtPath:folder error:nil];
             for (NSString *name in names) {
                 if (![[name.pathExtension lowercaseString] isEqualToString:@"ipa"]) continue;
-                if ([name isEqualToString:@"FairPlayed-target-unsigned.ipa"]) continue;
+                if ([name isEqualToString:@"FairPlayed-target-unsigned.ipa"] || [name isEqualToString:@"daru_재설치.ipa"] || [name isEqualToString:@"daru_순정복원.ipa"]) continue;
                 NSString *file=[folder stringByAppendingPathComponent:name];
                 BOOL isDirectory=NO;
                 if (![fm fileExistsAtPath:file isDirectory:&isDirectory] || isDirectory) continue;
@@ -1038,8 +1076,9 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     };
 
     NSString *input=[DocsDir() stringByAppendingPathComponent:@"Encrypted-input.ipa"];
-    if ([NSFileManager.defaultManager fileExistsAtPath:input]) self.lastIPA=input;
-    NSString *generated=[DocsDir() stringByAppendingPathComponent:@"FairPlayed-target-unsigned.ipa"];
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"DaruSelectionCleared"] &&
+        [NSFileManager.defaultManager fileExistsAtPath:input]) self.lastIPA=input;
+    NSString *generated=[DocsDir() stringByAppendingPathComponent:@"daru_재설치.ipa"];
     if ([NSFileManager.defaultManager fileExistsAtPath:generated]) self.resultIPA=generated;
     [self refresh];
     NSString *readme=[DocsDir() stringByAppendingPathComponent:@"IPA를 이 폴더에 복사하세요.txt"];
@@ -1237,6 +1276,7 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
             if (ok) {
                 self.lastIPA=dest;
                 self.resultIPA=nil;
+                [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"DaruSelectionCleared"];
                 self.packageStatus.text=@"IPA 등록 완료. ② 서명용 IPA 만들기를 실행하세요.";
                 FPLog(@"[입력 완료] %@ (%.1f MB)",source.lastPathComponent,
                        [[fm attributesOfItemAtPath:dest error:nil] fileSize]/1048576.0);
