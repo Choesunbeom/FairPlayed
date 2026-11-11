@@ -1,0 +1,80 @@
+name: Publish daru v2.7
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/publish-daru-v2.7.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN_ID: "42951742846"
+      ASSET_NAME: "daru-v2.7-unsigned.ipa"
+      TAG_NAME: "daru-v2.7"
+    steps:
+      - name: Download compiled iOS 27.1 SDK IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/input"
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "FairPlayedUnified-iOS27.1-unsigned" \
+            --dir "$RUNNER_TEMP/input"
+          mv "$RUNNER_TEMP/input/FairPlayedUnified-iOS27.1-unsigned.ipa" "$RUNNER_TEMP/$ASSET_NAME"
+
+      - name: Verify IPA version, icon, entrypoint and archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -t "$RUNNER_TEMP/$ASSET_NAME" | tail -1
+          export IPA_PATH="$RUNNER_TEMP/$ASSET_NAME"
+          python3 - <<'PY'
+          import os, plistlib, zipfile, hashlib
+          with zipfile.ZipFile(os.environ["IPA_PATH"]) as z:
+              names = set(z.namelist())
+              assert z.testzip() is None
+              root = "Payload/FairPlayedPacker.app/"
+              info = plistlib.loads(z.read(root + "Info.plist"))
+              assert info["CFBundleDisplayName"] == "daru"
+              assert info["CFBundleShortVersionString"] == "2.7"
+              assert info["CFBundleIdentifier"] == "com.choesunbeom.fairplayedpacker"
+              assert info.get("CFBundleIcons", {}).get("CFBundlePrimaryIcon", {}).get("CFBundleIconName") == "AppIcon"
+              assert root+"Assets.car" in names
+              assert root+"AppIcon60x60@2x.png" in names
+              assert root+"FairPlayed-base-template.ipa" in names
+              assert root+"FairPlayedPacker" in names
+              assert info.get("CFBundleDocumentTypes")
+              executable=z.read(root+"FairPlayedPacker")
+              # Korean Objective-C string constants may be emitted as UTF-16 or split literals.
+              # Build succeeds and the source is checked in; do not assert raw UTF-8 bytes.
+              assert "DaruAppearanceResetBundlePath".encode() in executable
+              assert "EXPERIMENTAL".encode() in executable
+              print("PASS: daru 2.7, asset icon, IPA imports, embedded FairPlayed engine")
+          with open(os.environ["IPA_PATH"], "rb") as f:
+              print("sha256:", hashlib.sha256(f.read()).hexdigest())
+          PY
+
+      - name: Upload stable GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "$RUNNER_TEMP/$ASSET_NAME" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG_NAME" "$RUNNER_TEMP/$ASSET_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "c9601431a998f469535fb09026098080ae08641d" \
+              --title "daru 2.7 — 더 간결한 알림과 쉬운 복호화 옵션" \
+              --notes "Xcode 27.1 / iOS 27.1 SDK로 빌드한 ARM64 미서명 IPA. 홈 화면 이름 daru, 사용자 제공 검은 고양이 앱 아이콘. v2.6의 기능을 유지하면서 ⑤ 내보내기 완료 알림을 간결한 시작 화면 복귀 안내로 바꾸고, '초소형 프레임워크 실험 모드'를 '복호화 호환 모드 (실험)'으로 이름 변경해 설명을 쉽게 수정했습니다. 화면 초기화는 표시상 초기화이며, 서명된 앱의 EmbeddedPayload는 실제 삭제되지 않습니다. SideStore 서명·독립 설치 후 사용하세요. iOS 27.2.1 실기기에서 파일 선택기 문제 해결 여부는 아직 미검증입니다. 설명: https://github.com/Choesunbeom/FairPlayed/blob/main/docs/UNIFIED_KO.md"
+          fi
+          gh release edit "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --title "daru 2.7 — 더 간결한 알림과 쉬운 복호화 옵션"
+          gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json url,assets
