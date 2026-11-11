@@ -628,6 +628,133 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
 }
 
 
+
+#pragma mark - IPA browser inside daru sandbox (no Files provider dependency)
+
+// Presents IPAs from the app's own shared Documents directory.
+// Unlike UIDocumentPickerViewController this never invokes the system Recents
+// File Provider interface that stalls on the reported iOS 27.2.1 setup.
+@interface DaruLocalIPABrowser : UITableViewController
+@property(nonatomic,copy) void (^onIPASelected)(NSURL *);
+@property(nonatomic,strong) NSArray<NSDictionary *> *items;
+@property(nonatomic,strong) UILabel *emptyLabel;
+@end
+
+@implementation DaruLocalIPABrowser
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title=@"daru · IPA 선택";
+    self.view.backgroundColor=UIColor.systemGroupedBackgroundColor;
+    self.tableView.backgroundColor=UIColor.systemGroupedBackgroundColor;
+    self.tableView.rowHeight=72;
+    self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"닫기"
+                                                                         style:UIBarButtonItemStylePlain
+                                                                        target:self
+                                                                        action:@selector(closeBrowser)];
+    self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
+                                                                                         target:self
+                                                                                         action:@selector(reloadIPAList)];
+    UIRefreshControl *refresh=UIRefreshControl.new;
+    [refresh addTarget:self action:@selector(reloadIPAList) forControlEvents:UIControlEventValueChanged];
+    self.refreshControl=refresh;
+
+    UILabel *info=UILabel.new;
+    info.numberOfLines=0;
+    info.textAlignment=NSTextAlignmentLeft;
+    info.font=[UIFont systemFontOfSize:14];
+    info.textColor=UIColor.secondaryLabelColor;
+    info.text=@"① 파일 앱을 열어 IPA를 '나의 iPhone → daru' 폴더에 복사하세요.\n② daru로 돌아와 파일 이름을 누르면 됩니다.\n파일이 안 보이면 오른쪽 위 새로고침을 누르세요.";
+    UIView *header=UIView.new;
+    header.backgroundColor=UIColor.clearColor;
+    [header addSubview:info];
+    info.translatesAutoresizingMaskIntoConstraints=NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [info.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:20],
+        [info.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-20],
+        [info.topAnchor constraintEqualToAnchor:header.topAnchor constant:15],
+        [info.bottomAnchor constraintEqualToAnchor:header.bottomAnchor constant:-15]
+    ]];
+    header.frame=CGRectMake(0,0,1,120);
+    self.tableView.tableHeaderView=header;
+
+    self.emptyLabel=UILabel.new;
+    self.emptyLabel.text=@"daru 폴더에 IPA가 없습니다.\n파일 앱에서 IPA를 복사한 뒤 새로고침해 주세요.";
+    self.emptyLabel.numberOfLines=0;
+    self.emptyLabel.textAlignment=NSTextAlignmentCenter;
+    self.emptyLabel.textColor=UIColor.secondaryLabelColor;
+    self.emptyLabel.font=[UIFont systemFontOfSize:15];
+    self.items=@[];
+    [self reloadIPAList];
+}
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self reloadIPAList];
+}
+- (void)closeBrowser {
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+- (void)reloadIPAList {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
+        NSMutableArray<NSDictionary *> *items=NSMutableArray.array;
+        NSFileManager *fm=NSFileManager.defaultManager;
+        NSString *docs=DocsDir();
+        for (NSString *folder in @[docs,[docs stringByAppendingPathComponent:@"Inbox"]]) {
+            NSArray<NSString *> *names=[fm contentsOfDirectoryAtPath:folder error:nil];
+            for (NSString *name in names) {
+                if (![[name.pathExtension lowercaseString] isEqualToString:@"ipa"]) continue;
+                if ([name isEqualToString:@"FairPlayed-target-unsigned.ipa"]) continue;
+                NSString *file=[folder stringByAppendingPathComponent:name];
+                BOOL isDirectory=NO;
+                if (![fm fileExistsAtPath:file isDirectory:&isDirectory] || isDirectory) continue;
+                NSDictionary *attributes=[fm attributesOfItemAtPath:file error:nil];
+                NSDate *when=attributes[NSFileModificationDate] ?: [NSDate distantPast];
+                [items addObject:@{
+                    @"url":[NSURL fileURLWithPath:file],
+                    @"name":name,
+                    @"length":attributes[NSFileSize] ?: @0,
+                    @"date":when
+                }];
+            }
+        }
+        [items sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){
+            return [b[@"date"] compare:a[@"date"]];
+        }];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.items=[items copy];
+            self.tableView.backgroundView=items.count ? nil : self.emptyLabel;
+            [self.tableView reloadData];
+            [self.refreshControl endRefreshing];
+        });
+    });
+}
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 1; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return (NSInteger)self.items.count;
+}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *reuse=@"DaruLocalIPA";
+    UITableViewCell *cell=[tableView dequeueReusableCellWithIdentifier:reuse];
+    if (!cell) cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:reuse];
+    NSDictionary *item=self.items[indexPath.row];
+    cell.textLabel.text=item[@"name"];
+    cell.textLabel.lineBreakMode=NSLineBreakByTruncatingMiddle;
+    cell.textLabel.numberOfLines=2;
+    cell.detailTextLabel.text=[NSString stringWithFormat:@"%.1f MB · daru 내부 파일", [item[@"length"] doubleValue]/1048576.0];
+    cell.imageView.image=[UIImage systemImageNamed:@"doc.zipper"];
+    cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
+    return cell;
+}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row >= self.items.count) return;
+    NSURL *url=self.items[indexPath.row][@"url"];
+    [self dismissViewControllerAnimated:YES completion:^{
+        if (self.onIPASelected) self.onIPASelected(url);
+    }];
+}
+@end
+
 #pragma mark - Native Liquid Glass workspace (iOS 26+)
 
 @interface FPWorkspace : UITabBarController <UIDocumentPickerDelegate>
@@ -809,9 +936,9 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     UIStackView *fileCard=[self card];
     [fileCard addArrangedSubview:[self label:@"① 암호화 IPA 선택" size:19 strong:YES]];
     [fileCard addArrangedSubview:[self label:@"iPadn에서 다운로드한 본인 보유 앱의 IPA를 선택하세요." size:14 strong:NO]];
-    [fileCard addArrangedSubview:[self button:@"파일 앱에서 IPA 선택" symbol:@"folder" tag:10 primary:NO]];
-    [fileCard addArrangedSubview:[self button:@"daru 폴더의 IPA 선택 (안정적)" symbol:@"tray.full" tag:17 primary:NO]];
-    [fileCard addArrangedSubview:[self label:@"파일 선택기의 ‘최근 항목’이 멈추면: 파일 앱 → 나의 iPhone → daru 폴더로 IPA를 복사한 뒤 ‘daru 폴더의 IPA 선택’을 누르세요." size:12 strong:NO]];
+    [fileCard addArrangedSubview:[self button:@"IPA 선택 (daru 파일 목록)" symbol:@"doc.text.magnifyingglass" tag:10 primary:YES]];
+    [fileCard addArrangedSubview:[self button:@"iOS 파일 앱에서 직접 찾아보기 (보조)" symbol:@"folder" tag:17 primary:NO]];
+    [fileCard addArrangedSubview:[self label:@"기본 선택은 iOS의 '최근 항목' 화면을 열지 않습니다. 파일 앱에서 '나의 iPhone → daru'에 IPA를 복사한 다음 위 버튼에서 선택하세요. 보조 버튼은 iOS 파일 선택기가 정상 작동할 때만 이용하세요." size:12 strong:NO]];
     self.inputLabel=[self label:@"선택된 파일 없음" size:13 strong:NO];
     self.inputLabel.textColor=UIColor.secondaryLabelColor;
     [fileCard addArrangedSubview:self.inputLabel];
@@ -918,7 +1045,7 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     NSString *readme=[DocsDir() stringByAppendingPathComponent:@"IPA를 이 폴더에 복사하세요.txt"];
     if (![NSFileManager.defaultManager fileExistsAtPath:readme])
         [@"파일 앱 → 나의 iPhone → daru 폴더에 .ipa 파일을 복사하세요. daru 앱의 'daru 폴더의 IPA 선택' 버튼으로 가져올 수 있습니다.\n" writeToFile:readme atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    FPLog(@"daru 2.4 · 파일 앱 선택기 대체 경로 및 검은 고양이 아이콘");
+    FPLog(@"daru 2.5 · 기본 IPA 선택기는 daru 자체 목록을 사용합니다 (iOS 최근 항목 우회).");
     if (FPRunningAsLiveContainerGuest())
         FPLog(@"[환경 주의] LiveContainer 안에서는 FairPlay 복호화가 불가능합니다. SideStore 직접 설치하세요.");
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{[FPRunner runEnvironment];});
@@ -958,50 +1085,30 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     switch (sender.tag) {
         case 10: {
             if (self.busy) return;
-            // The old picker included UTTypeData, which flooded Files/Recents with
-            // every unrelated file on some iOS 27 iPad layouts. Restrict to IPA/ZIP.
-            UTType *ipa = [UTType typeWithFilenameExtension:@"ipa" conformingToType:UTTypeData];
-            NSMutableArray<UTType *> *types=[NSMutableArray array];
-            if (ipa) [types addObject:ipa];
-            if (UTTypeZIP) [types addObject:UTTypeZIP];
-            if (!types.count) [types addObject:UTTypeData];
-            UIDocumentPickerViewController *picker=[[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types asCopy:NO];
-            picker.delegate=self;
-            picker.allowsMultipleSelection=NO;
-            picker.shouldShowFileExtensions=YES;
-            // Full-screen avoids the narrow iPad Files sheet visible in the report.
-            picker.modalPresentationStyle=UIModalPresentationFullScreen;
-            FPLog(@"[파일 선택] Files 브라우저 전체 화면 열기. '최근 항목'이 멈추면 daru 폴더 선택을 이용하세요.");
-            [self.selectedViewController presentViewController:picker animated:YES completion:nil];
+            DaruLocalIPABrowser *browser=[[DaruLocalIPABrowser alloc] initWithStyle:UITableViewStyleInsetGrouped];
+            __weak typeof(self) weakSelf=self;
+            browser.onIPASelected=^(NSURL *file) {
+                FPLog(@"[IPA 목록] 사용자 선택: %@",file.lastPathComponent);
+                [weakSelf importIPAAtURL:file];
+            };
+            UINavigationController *navigation=[[UINavigationController alloc] initWithRootViewController:browser];
+            navigation.modalPresentationStyle=UIModalPresentationFullScreen;
+            [self presentViewController:navigation animated:YES completion:nil];
             break;
         }
         case 17: {
             if (self.busy) return;
-            UIAlertController *sheet=[UIAlertController alertControllerWithTitle:@"daru 폴더에서 IPA 선택" message:@"파일 앱 → 나의 iPhone → daru 폴더에 IPA를 복사하면 여기서 바로 선택할 수 있습니다. iOS의 최근 항목 화면을 거치지 않습니다." preferredStyle:UIAlertControllerStyleActionSheet];
-            NSUInteger found=0;
-            for (NSString *folder in @[DocsDir(),[DocsDir() stringByAppendingPathComponent:@"Inbox"]]) {
-                NSArray *names=[[NSFileManager.defaultManager contentsOfDirectoryAtPath:folder error:nil] sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
-                for (NSString *name in names) {
-                    if (![[name.pathExtension lowercaseString] isEqualToString:@"ipa"]) continue;
-                    if ([name isEqualToString:@"FairPlayed-target-unsigned.ipa"]) continue;
-                    NSString *source=[folder stringByAppendingPathComponent:name];
-                    BOOL isDir=NO;
-                    if (![NSFileManager.defaultManager fileExistsAtPath:source isDirectory:&isDir] || isDir) continue;
-                    NSString *nameForAction=[name isEqualToString:@"Encrypted-input.ipa"] ? @"이전에 가져온 IPA" : name;
-                    [sheet addAction:[UIAlertAction actionWithTitle:nameForAction style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-                        [self importIPAAtURL:[NSURL fileURLWithPath:source]];
-                    }]];
-                    found++;
-                    if (found >= 20) break;
-                }
-                if (found >= 20) break;
-            }
-            if (!found) {
-                [sheet addAction:[UIAlertAction actionWithTitle:@"IPA가 없습니다 — 파일 앱에서 daru 폴더에 복사해 주세요" style:UIAlertActionStyleDefault handler:nil]];
-            }
-            [sheet addAction:[UIAlertAction actionWithTitle:@"닫기" style:UIAlertActionStyleCancel handler:nil]];
-            sheet.popoverPresentationController.sourceView=sender;
-            [self.selectedViewController presentViewController:sheet animated:YES completion:nil];
+            // The optional Files path uses the original pre-glass configuration:
+            // 'asCopy:YES', permissive file types and presentation by the root
+            // controller, rather than the Glass tab's selected child.
+            UTType *ipa=[UTType typeWithIdentifier:@"com.apple.itunes.ipa"];
+            NSArray<UTType *> *types=ipa ? @[ipa,UTTypeZIP,UTTypeData] : @[UTTypeZIP,UTTypeData];
+            UIDocumentPickerViewController *picker=[[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types asCopy:YES];
+            picker.delegate=self;
+            picker.allowsMultipleSelection=NO;
+            picker.modalPresentationStyle=UIModalPresentationPageSheet;
+            FPLog(@"[iOS 보조 선택기] 이전 버전의 복사 모드로 호출. 최근 항목 화면이 멈추면 daru 목록을 이용하세요.");
+            [self presentViewController:picker animated:YES completion:nil];
             break;
         }
         case 11: {
@@ -1091,7 +1198,11 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     }
 }
 - (void)documentPicker:(UIDocumentPickerViewController *)picker didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    FPLog(@"[iOS 보조 선택기] 파일 선택 완료: %@", urls.firstObject.lastPathComponent ?: @"없음");
     [self importIPAAtURL:urls.firstObject];
+}
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)picker {
+    FPLog(@"[iOS 보조 선택기] 취소됨");
 }
 - (void)importIPAAtURL:(NSURL *)source {
     if (!source || self.busy) return;
