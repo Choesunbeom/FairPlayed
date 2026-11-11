@@ -13,7 +13,7 @@ guard let icon = NSImage(contentsOfFile: source) else {
 }
 let size = 1024
 let image = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size,
-                             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                             bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false,
                              isPlanar: false, colorSpaceName: .deviceRGB,
                              bytesPerRow: 0, bitsPerPixel: 0)!
 let context = NSGraphicsContext(bitmapImageRep: image)!
