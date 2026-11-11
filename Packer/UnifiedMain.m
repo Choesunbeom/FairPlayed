@@ -623,240 +623,441 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     return [bundle containsString:@"/Documents/Applications/"];
 }
 
-#pragma mark - Unified on-device interface
 
-@interface FPViewController : UIViewController <UIDocumentPickerDelegate>
-@property (nonatomic, strong) UITextView *textView;
-@property (nonatomic, strong) UILabel *stateLabel;
-@property (nonatomic, strong) UIButton *packButton;
-@property (nonatomic, strong) UIButton *decryptButton;
-@property (nonatomic, strong) UIButton *shareButton;
-@property (nonatomic, strong) UIActivityIndicatorView *spinner;
-@property (nonatomic, strong) NSString *lastIPA;
-@property (nonatomic, strong) NSString *resultIPA;
-@property (nonatomic, assign) BOOL busy;
+#pragma mark - Native Liquid Glass workspace (iOS 26+)
+
+@interface FPWorkspace : UITabBarController <UIDocumentPickerDelegate>
+@property(nonatomic,strong) UILabel *inputLabel;
+@property(nonatomic,strong) UILabel *packageStatus;
+@property(nonatomic,strong) UILabel *decryptStatus;
+@property(nonatomic,strong) UILabel *logSummary;
+@property(nonatomic,strong) UIButton *generateButton;
+@property(nonatomic,strong) UIButton *sharePackageButton;
+@property(nonatomic,strong) UIButton *decryptButton;
+@property(nonatomic,strong) UIButton *shareResultButton;
+@property(nonatomic,strong) UIActivityIndicatorView *spinner;
+@property(nonatomic,strong) UITextView *inlineLog;
+@property(nonatomic,strong) UITextView *fullLog;
+@property(nonatomic,strong) NSMutableString *displayLog;
+@property(nonatomic,strong) NSString *lastIPA;
+@property(nonatomic,strong) NSString *resultIPA;
+@property(nonatomic,assign) BOOL busy;
 @end
 
-@implementation FPViewController
-- (UIButton *)makeButton:(NSString *)title tag:(NSInteger)tag {
-    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
-    UIButtonConfiguration *config = (tag == 1) ? UIButtonConfiguration.filledButtonConfiguration : UIButtonConfiguration.tintedButtonConfiguration;
-    config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
-    config.title = title;
-    config.contentInsets = NSDirectionalEdgeInsetsMake(13, 12, 13, 12);
-    button.configuration = config;
-    button.tag = tag;
-    [button addTarget:self action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
-    return button;
+@implementation FPWorkspace
+
+- (UILabel *)label:(NSString *)s size:(CGFloat)sz strong:(BOOL)strong {
+    UILabel *v=UILabel.new;
+    v.text=s;
+    v.numberOfLines=0;
+    v.textColor=UIColor.labelColor;
+    v.font=strong ? [UIFont boldSystemFontOfSize:sz] : [UIFont systemFontOfSize:sz];
+    return v;
 }
-- (UILabel *)label:(NSString *)text size:(CGFloat)size bold:(BOOL)bold {
-    UILabel *v = UILabel.new;
-    v.font = bold ? [UIFont boldSystemFontOfSize:size] : [UIFont systemFontOfSize:size];
-    v.text = text;
-    v.textColor = UIColor.labelColor;
-    v.numberOfLines = 0;
+- (UIButton *)button:(NSString *)title symbol:(NSString *)symbol tag:(NSInteger)tag primary:(BOOL)primary {
+    UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];
+    UIButtonConfiguration *config=primary ? UIButtonConfiguration.filledButtonConfiguration : UIButtonConfiguration.tintedButtonConfiguration;
+    config.title=title;
+    config.cornerStyle=UIButtonConfigurationCornerStyleLarge;
+    config.contentInsets=NSDirectionalEdgeInsetsMake(14,12,14,12);
+    if (symbol.length) config.image=[UIImage systemImageNamed:symbol];
+    config.imagePadding=8;
+    b.configuration=config;
+    b.tag=tag;
+    [b addTarget:self action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+    return b;
+}
+- (UIStackView *)stack {
+    UIStackView *v=UIStackView.new;
+    v.axis=UILayoutConstraintAxisVertical;
+    v.alignment=UIStackViewAlignmentFill;
+    v.spacing=10;
+    return v;
+}
+- (UIStackView *)card {
+    UIStackView *v=[self stack];
+    v.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
+    v.layer.cornerRadius=20;
+    v.layer.cornerCurve=kCACornerCurveContinuous;
+    v.layoutMargins=UIEdgeInsetsMake(18,17,18,17);
+    v.layoutMarginsRelativeArrangement=YES;
+    return v;
+}
+- (UIStackView *)page:(UIViewController *)c {
+    UIScrollView *scroll=UIScrollView.new;
+    scroll.translatesAutoresizingMaskIntoConstraints=NO;
+    scroll.keyboardDismissMode=UIScrollViewKeyboardDismissModeOnDrag;
+    scroll.alwaysBounceVertical=YES;
+    c.view.backgroundColor=UIColor.systemGroupedBackgroundColor;
+    [c.view addSubview:scroll];
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.topAnchor constraintEqualToAnchor:c.view.safeAreaLayoutGuide.topAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:c.view.safeAreaLayoutGuide.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:c.view.safeAreaLayoutGuide.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:c.view.safeAreaLayoutGuide.bottomAnchor]
+    ]];
+    UIStackView *s=[self stack];
+    s.spacing=16;
+    s.layoutMargins=UIEdgeInsetsMake(20,16,32,16);
+    s.layoutMarginsRelativeArrangement=YES;
+    s.translatesAutoresizingMaskIntoConstraints=NO;
+    [scroll addSubview:s];
+    [NSLayoutConstraint activateConstraints:@[
+        [s.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
+        [s.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
+        [s.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
+        [s.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
+        [s.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor]
+    ]];
+    return s;
+}
+- (UIView *)glassTitle:(NSString *)title subtitle:(NSString *)subtitle {
+    UIVisualEffect *effect=nil;
+    if (@available(iOS 26.0, *)) {
+        effect=[UIGlassEffect new];
+    } else {
+        effect=[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    }
+    UIVisualEffectView *glass=[[UIVisualEffectView alloc] initWithEffect:effect];
+    glass.layer.cornerRadius=24;
+    glass.layer.cornerCurve=kCACornerCurveContinuous;
+    glass.clipsToBounds=YES;
+    UIStackView *inner=[self stack];
+    inner.spacing=4;
+    inner.layoutMargins=UIEdgeInsetsMake(18,20,18,20);
+    inner.layoutMarginsRelativeArrangement=YES;
+    inner.translatesAutoresizingMaskIntoConstraints=NO;
+    [inner addArrangedSubview:[self label:title size:23 strong:YES]];
+    [inner addArrangedSubview:[self label:subtitle size:13 strong:NO]];
+    [glass.contentView addSubview:inner];
+    [NSLayoutConstraint activateConstraints:@[
+        [inner.topAnchor constraintEqualToAnchor:glass.contentView.topAnchor],
+        [inner.leadingAnchor constraintEqualToAnchor:glass.contentView.leadingAnchor],
+        [inner.trailingAnchor constraintEqualToAnchor:glass.contentView.trailingAnchor],
+        [inner.bottomAnchor constraintEqualToAnchor:glass.contentView.bottomAnchor]
+    ]];
+    return glass;
+}
+- (UIView *)divider {
+    UIView *v=UIView.new;
+    v.backgroundColor=UIColor.separatorColor;
+    v.translatesAutoresizingMaskIntoConstraints=NO;
+    [v.heightAnchor constraintEqualToConstant:0.5].active=YES;
+    return v;
+}
+- (UITextView *)logView:(CGFloat)height {
+    UITextView *v=UITextView.new;
+    v.editable=NO;
+    v.selectable=YES;
+    v.scrollEnabled=YES;
+    v.textColor=UIColor.secondaryLabelColor;
+    v.backgroundColor=UIColor.tertiarySystemGroupedBackgroundColor;
+    v.layer.cornerRadius=12;
+    v.layer.cornerCurve=kCACornerCurveContinuous;
+    v.font=[UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
+    v.translatesAutoresizingMaskIntoConstraints=NO;
+    [v.heightAnchor constraintEqualToConstant:height].active=YES;
     return v;
 }
 - (BOOL)hasEmbeddedTarget {
-    NSString *root = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"EmbeddedPayload"];
-    NSArray<NSString *> *items = [NSFileManager.defaultManager contentsOfDirectoryAtPath:root error:nil];
-    for (NSString *name in items) {
-        if (![[NSDictionary dictionaryWithContentsOfFile:[[root stringByAppendingPathComponent:name] stringByAppendingPathComponent:@"Info.plist"]] isKindOfClass:NSDictionary.class]) continue;
-        return YES;
+    NSString *root=[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"EmbeddedPayload"];
+    for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:root error:nil]) {
+        NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[[root stringByAppendingPathComponent:name] stringByAppendingPathComponent:@"Info.plist"]];
+        if ([info isKindOfClass:NSDictionary.class]) return YES;
     }
     return NO;
 }
+- (BOOL)hasCompleteResult {
+    NSString *dir=[DocsDir() stringByAppendingPathComponent:@"Decrypted"];
+    for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil]) {
+        if ([[name lowercaseString] hasSuffix:@"-decrypted.ipa"] && ![[name lowercaseString] containsString:@"partial"]) return YES;
+    }
+    return NO;
+}
+- (NSArray<NSURL *> *)resultFiles {
+    NSString *dir=[DocsDir() stringByAppendingPathComponent:@"Decrypted"];
+    NSMutableArray<NSURL *> *results=NSMutableArray.array;
+    for (NSString *name in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil] sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)]) {
+        if ([[name.pathExtension lowercaseString] isEqualToString:@"ipa"])
+            [results addObject:[NSURL fileURLWithPath:[dir stringByAppendingPathComponent:name]]];
+    }
+    return results;
+}
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
+    // Native iOS 26+ UITabBar receives Liquid Glass automatically when built
+    // with a current SDK. Unlike a simulated blur, it uses the system material.
+    UIViewController *packing=UIViewController.new;
+    UIViewController *decrypting=UIViewController.new;
+    UIViewController *logging=UIViewController.new;
+    packing.tabBarItem=[[UITabBarItem alloc] initWithTitle:@"패키징" image:[UIImage systemImageNamed:@"shippingbox.fill"] tag:0];
+    decrypting.tabBarItem=[[UITabBarItem alloc] initWithTitle:@"복호화" image:[UIImage systemImageNamed:@"lock.open.fill"] tag:1];
+    logging.tabBarItem=[[UITabBarItem alloc] initWithTitle:@"로그" image:[UIImage systemImageNamed:@"text.alignleft"] tag:2];
+    self.viewControllers=@[packing,decrypting,logging];
+    self.selectedIndex=0;
 
-    UIScrollView *scroll = UIScrollView.new;
-    scroll.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:scroll];
-    [NSLayoutConstraint activateConstraints:@[
-        [scroll.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
-        [scroll.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor],
-        [scroll.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
-        [scroll.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor]]];
+    // The action and compact log live in one progress area but use separate
+    // subpanels, as requested.
+    UIStackView *pack=[self page:packing];
+    [pack addArrangedSubview:[self glassTitle:@"FairPlayed 통합" subtitle:@"암호화된 IPA 하나만 선택 · 서명은 SideStore에서"]];
+    UIStackView *fileCard=[self card];
+    [fileCard addArrangedSubview:[self label:@"① 암호화 IPA 선택" size:19 strong:YES]];
+    [fileCard addArrangedSubview:[self label:@"iPadn에서 다운로드한 본인 보유 앱의 IPA를 선택하세요." size:14 strong:NO]];
+    [fileCard addArrangedSubview:[self button:@"파일 앱에서 IPA 선택" symbol:@"folder" tag:10 primary:NO]];
+    self.inputLabel=[self label:@"선택된 파일 없음" size:13 strong:NO];
+    self.inputLabel.textColor=UIColor.secondaryLabelColor;
+    [fileCard addArrangedSubview:self.inputLabel];
+    [pack addArrangedSubview:fileCard];
 
-    UIStackView *stack = UIStackView.new;
-    stack.axis = UILayoutConstraintAxisVertical;
-    stack.spacing = 12;
-    stack.translatesAutoresizingMaskIntoConstraints = NO;
-    stack.layoutMargins = UIEdgeInsetsMake(22, 18, 22, 18);
-    stack.layoutMarginsRelativeArrangement = YES;
-    [scroll addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
-        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
-        [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
-        [stack.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
-        [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor]]];
+    UIStackView *working=[self stack];
+    working.spacing=8;
+    [working addArrangedSubview:[self label:@"작업 진행" size:20 strong:YES]];
+    UIStackView *generateCard=[self card];
+    [generateCard addArrangedSubview:[self label:@"② SideStore 서명용 IPA 생성" size:17 strong:YES]];
+    [generateCard addArrangedSubview:[self label:@"내장된 FairPlayed 템플릿과 선택한 IPA를 재패키징합니다." size:13 strong:NO]];
+    self.generateButton=[self button:@"서명용 IPA 만들기" symbol:@"shippingbox" tag:11 primary:YES];
+    [generateCard addArrangedSubview:self.generateButton];
+    self.spinner=[[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+    self.spinner.hidesWhenStopped=YES;
+    [generateCard addArrangedSubview:self.spinner];
+    self.packageStatus=[self label:@"IPA를 선택하면 생성할 수 있습니다." size:13 strong:NO];
+    [generateCard addArrangedSubview:self.packageStatus];
+    [working addArrangedSubview:generateCard];
 
-    [stack addArrangedSubview:[self label:@"FairPlayed 통합 패커" size:28 bold:YES]];
-    [stack addArrangedSubview:[self label:@"FairPlayed 복호화 엔진과 기본 IPA가 내장되어 있습니다. 암호화된 IPA만 선택하세요." size:14 bold:NO]];
-    self.stateLabel = [self label:@"상태 확인 중…" size:14 bold:YES];
-    [stack addArrangedSubview:self.stateLabel];
+    UIStackView *compactCard=[self card];
+    [compactCard addArrangedSubview:[self label:@"실시간 작업 로그" size:16 strong:YES]];
+    self.inlineLog=[self logView:154];
+    [compactCard addArrangedSubview:self.inlineLog];
+    [compactCard addArrangedSubview:[self button:@"전체 로그 보기" symbol:@"list.bullet.rectangle" tag:15 primary:NO]];
+    [working addArrangedSubview:compactCard];
+    [pack addArrangedSubview:working];
 
-    [stack addArrangedSubview:[self makeButton:@"① 암호화된 IPA 선택" tag:0]];
-    self.packButton = [self makeButton:@"② 서명용 IPA 만들기" tag:1];
-    [stack addArrangedSubview:self.packButton];
-    self.decryptButton = [self makeButton:@"③ 내장 앱 복호화" tag:2];
-    [stack addArrangedSubview:self.decryptButton];
-    self.shareButton = [self makeButton:@"④ IPA · 결과 파일 공유" tag:3];
-    [stack addArrangedSubview:self.shareButton];
+    UIStackView *shareCard=[self card];
+    [shareCard addArrangedSubview:[self label:@"③ IPA 공유 · SideStore 재설치" size:17 strong:YES]];
+    [shareCard addArrangedSubview:[self label:@"생성된 IPA를 SideStore로 서명·재설치한 뒤, 메뉴바의 ‘복호화’로 이동하세요." size:14 strong:NO]];
+    self.sharePackageButton=[self button:@"IPA 내보내기 / SideStore 공유" symbol:@"square.and.arrow.up" tag:12 primary:NO];
+    [shareCard addArrangedSubview:self.sharePackageButton];
+    [pack addArrangedSubview:shareCard];
 
-    self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
-    self.spinner.hidesWhenStopped = YES;
-    [stack addArrangedSubview:self.spinner];
-    [stack addArrangedSubview:[self label:@"복호화는 재패키징된 IPA를 SideStore로 서명·재설치한 뒤 가능합니다. 현재 설치된 앱의 데이터 폴더에 IPA를 넣는 것만으로는 복호화되지 않습니다." size:13 bold:NO]];
-    [stack addArrangedSubview:[self label:@"실행 기록" size:17 bold:YES]];
-    self.textView = UITextView.new;
-    self.textView.editable = NO;
-    self.textView.scrollEnabled = YES;
-    self.textView.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
-    self.textView.layer.cornerRadius = 12;
-    self.textView.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
-    self.textView.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.textView.heightAnchor constraintEqualToConstant:240].active = YES;
-    [stack addArrangedSubview:self.textView];
+    UIStackView *dec=[self page:decrypting];
+    [dec addArrangedSubview:[self glassTitle:@"복호화" subtitle:@"생성한 FairPlayed IPA를 SideStore에 독립 설치한 다음 진행"]];
+    UIStackView *decryptCard=[self card];
+    [decryptCard addArrangedSubview:[self label:@"④ 내장된 앱 복호화" size:19 strong:YES]];
+    self.decryptStatus=[self label:@"재설치한 앱의 내장 페이로드를 확인합니다." size:14 strong:NO];
+    [decryptCard addArrangedSubview:self.decryptStatus];
+    self.decryptButton=[self button:@"복호화 실행" symbol:@"lock.open" tag:13 primary:YES];
+    [decryptCard addArrangedSubview:self.decryptButton];
+    [dec addArrangedSubview:decryptCard];
 
-    __weak typeof(self) weakSelf = self;
-    gUILog = ^(NSString *line) {
+    UIStackView *resultCard=[self card];
+    [resultCard addArrangedSubview:[self label:@"⑤ 복호화 결과 확인 및 공유" size:18 strong:YES]];
+    [resultCard addArrangedSubview:[self label:@"실패한 프레임워크가 있는 PARTIAL IPA는 LiveContainer에서 실행할 수 없습니다. 로그에서 실패 개수를 먼저 확인하세요." size:13 strong:NO]];
+    self.shareResultButton=[self button:@"복호화 결과 IPA 내보내기" symbol:@"square.and.arrow.up" tag:14 primary:NO];
+    [resultCard addArrangedSubview:self.shareResultButton];
+    [dec addArrangedSubview:resultCard];
+
+    UIStackView *logs=[self page:logging];
+    [logs addArrangedSubview:[self glassTitle:@"진단 로그" subtitle:@"암호화 해제 진행과 실패한 프레임워크 확인"]];
+    UIStackView *logCard=[self card];
+    [logCard addArrangedSubview:[self label:@"전체 실행 로그" size:18 strong:YES]];
+    self.fullLog=[self logView:460];
+    [logCard addArrangedSubview:self.fullLog];
+    [logCard addArrangedSubview:[self button:@"로그 파일 공유" symbol:@"square.and.arrow.up" tag:16 primary:NO]];
+    [logs addArrangedSubview:logCard];
+
+    self.displayLog=[NSMutableString string];
+    NSString *record=[DocsDir() stringByAppendingPathComponent:@"fairplayed.log"];
+    NSString *previous=[NSString stringWithContentsOfFile:record encoding:NSUTF8StringEncoding error:nil];
+    if (previous.length) {
+        [self.displayLog appendString:previous.length > 50000 ? [previous substringFromIndex:previous.length-50000] : previous];
+        self.inlineLog.text=self.displayLog;
+        self.fullLog.text=self.displayLog;
+    }
+    __weak typeof(self) weakSelf=self;
+    gUILog=^(NSString *line) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            UITextView *tv = weakSelf.textView;
-            if (!tv) return;
-            tv.text = [tv.text stringByAppendingFormat:@"%@\n", line];
-            if (tv.text.length > 100000) tv.text = [tv.text substringFromIndex:tv.text.length - 70000];
-            [tv scrollRangeToVisible:NSMakeRange(tv.text.length, 0)];
+            FPWorkspace *s=weakSelf;
+            if (!s) return;
+            [s.displayLog appendFormat:@"%@\n",line];
+            if (s.displayLog.length > 90000)
+                [s.displayLog deleteCharactersInRange:NSMakeRange(0,s.displayLog.length-65000)];
+            NSString *shortText=s.displayLog.length > 7000 ? [s.displayLog substringFromIndex:s.displayLog.length-7000] : s.displayLog;
+            s.inlineLog.text=shortText;
+            s.fullLog.text=s.displayLog;
+            [s.inlineLog scrollRangeToVisible:NSMakeRange(s.inlineLog.text.length,0)];
+            [s.fullLog scrollRangeToVisible:NSMakeRange(s.fullLog.text.length,0)];
         });
     };
-    NSString *target = [DocsDir() stringByAppendingPathComponent:@"Encrypted-input.ipa"];
-    if ([NSFileManager.defaultManager fileExistsAtPath:target]) self.lastIPA = target;
-    NSString *result = [DocsDir() stringByAppendingPathComponent:@"FairPlayed-target-unsigned.ipa"];
-    if ([NSFileManager.defaultManager fileExistsAtPath:result]) self.resultIPA = result;
-    [self refreshState];
-    FPLog(@"FairPlayed 통합 패커 실행. 복호화 엔진: 원본 FairPlayed.");
-    FPLog(@"내장 페이로드 상태: %@", [self hasEmbeddedTarget] ? @"있음 — 복호화 가능성 검사" : @"없음 — 먼저 IPA 생성/재서명/재설치 필요");
-    if (FPRunningAsLiveContainerGuest()) {
-        FPLog(@"[중요] 이 앱은 LiveContainer의 게스트로 구동 중입니다. FairPlay 복호화는 여기서 불가능합니다.");
-        FPLog(@"'② 서명용 IPA 만들기'로 생성한 파일을 SideStore에서 직접 설치하고 홈 화면에서 실행하세요.");
-    }
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ [FPRunner runEnvironment]; });
+
+    NSString *input=[DocsDir() stringByAppendingPathComponent:@"Encrypted-input.ipa"];
+    if ([NSFileManager.defaultManager fileExistsAtPath:input]) self.lastIPA=input;
+    NSString *generated=[DocsDir() stringByAppendingPathComponent:@"FairPlayed-target-unsigned.ipa"];
+    if ([NSFileManager.defaultManager fileExistsAtPath:generated]) self.resultIPA=generated;
+    [self refresh];
+    FPLog(@"FairPlayed 통합 패커 2.2 · 하단 Liquid Glass 메뉴 UI");
+    if (FPRunningAsLiveContainerGuest())
+        FPLog(@"[환경 주의] LiveContainer 안에서는 FairPlay 복호화가 불가능합니다. SideStore 직접 설치하세요.");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{[FPRunner runEnvironment];});
 }
-- (void)refreshState {
-    BOOL hasEmbedded = [self hasEmbeddedTarget];
-    BOOL guest = FPRunningAsLiveContainerGuest();
-    self.stateLabel.text = guest
-        ? @"LiveContainer 내부 실행 감지: IPA 생성은 가능하지만 복호화할 수 없습니다. 생성된 IPA를 SideStore로 직접 설치하세요."
-        : hasEmbedded
-            ? @"정식 설치된 앱에서 대상 파일 발견: '③ 내장 앱 복호화'로 시험하세요."
-            : @"기본 패커 모드: 암호화된 IPA를 선택해 서명용 파일을 만드세요.";
-    self.packButton.enabled = !self.busy && self.lastIPA != nil;
-    self.decryptButton.enabled = !self.busy && hasEmbedded && !guest;
-    self.shareButton.enabled = !self.busy;
+- (void)refresh {
+    BOOL guest=FPRunningAsLiveContainerGuest();
+    BOOL embedded=[self hasEmbeddedTarget];
+    self.generateButton.enabled=!self.busy && self.lastIPA.length>0;
+    self.sharePackageButton.enabled=!self.busy && self.resultIPA.length>0 && [NSFileManager.defaultManager fileExistsAtPath:self.resultIPA];
+    self.decryptButton.enabled=!self.busy && embedded && !guest;
+    self.shareResultButton.enabled=!self.busy && [self resultFiles].count>0;
+    self.inputLabel.text=self.lastIPA ? [NSString stringWithFormat:@"✓ %@ (%.1f MB)",self.lastIPA.lastPathComponent,[[NSFileManager.defaultManager attributesOfItemAtPath:self.lastIPA error:nil] fileSize]/1048576.0] : @"선택된 IPA 없음";
+    if (guest) self.decryptStatus.text=@"LiveContainer 내부 실행 중: 복호화 불가. SideStore로 독립 설치하세요.";
+    else if (embedded) self.decryptStatus.text=@"설치된 앱에 암호화 대상이 포함되어 있습니다. 아래 버튼으로 복호화를 시도하세요.";
+    else self.decryptStatus.text=@"내장된 대상 앱 없음. 패키징 → 공유 → SideStore 재설치 후 돌아오세요.";
 }
-- (void)setBusyUI:(BOOL)busy {
-    self.busy = busy;
-    if (busy) [self.spinner startAnimating]; else [self.spinner stopAnimating];
-    [self refreshState];
-}
-- (void)background:(dispatch_block_t)block {
-    [self setBusyUI:YES];
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        block();
-        dispatch_async(dispatch_get_main_queue(), ^{ [self setBusyUI:NO]; });
+- (void)working:(dispatch_block_t)work {
+    self.busy=YES;
+    [self.spinner startAnimating];
+    [self refresh];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASSUSER_INITIATED,0),^{
+        work();
+        dispatch_async(dispatch_get_main_queue(),^{
+            self.busy=NO;
+            [self.spinner stopAnimating];
+            [self refresh];
+        });
     });
 }
-- (void)tap:(UIButton *)b {
-    switch (b.tag) {
-        case 0: {
+- (void)sharePaths:(NSArray<NSURL *> *)urls from:(UIView *)sender {
+    if (!urls.count) { FPLog(@"공유할 파일이 없습니다."); return; }
+    UIActivityViewController *share=[[UIActivityViewController alloc] initWithActivityItems:urls applicationActivities:nil];
+    share.popoverPresentationController.sourceView=sender;
+    [self.selectedViewController presentViewController:share animated:YES completion:nil];
+}
+- (void)tap:(UIButton *)sender {
+    switch (sender.tag) {
+        case 10: {
             if (self.busy) return;
-            UTType *ipa = [UTType typeWithIdentifier:@"com.apple.itunes.ipa"];
-            NSArray *types = ipa ? @[ipa, UTTypeZIP, UTTypeData] : @[UTTypeZIP, UTTypeData];
-            UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types asCopy:YES];
-            picker.delegate = self;
-            [self presentViewController:picker animated:YES completion:nil];
+            UTType *type=[UTType typeWithIdentifier:@"com.apple.itunes.ipa"];
+            NSArray *types=type ? @[type,UTTypeZIP,UTTypeData] : @[UTTypeZIP,UTTypeData];
+            UIDocumentPickerViewController *picker=[[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types asCopy:YES];
+            picker.delegate=self;
+            [self.selectedViewController presentViewController:picker animated:YES completion:nil];
             break;
         }
-        case 1: {
-            if (!self.lastIPA || self.busy) return;
-            NSString *target = self.lastIPA;
-            NSString *base = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"FairPlayed-base-template.ipa"];
+        case 11: {
+            if (self.busy || !self.lastIPA) return;
+            NSString *base=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"FairPlayed-base-template.ipa"];
             if (![NSFileManager.defaultManager fileExistsAtPath:base]) {
-                FPLog(@"오류: 기본 FairPlayed IPA가 내장되지 않았습니다. 통합 버전 IPA를 설치하세요.");
+                self.packageStatus.text=@"오류: 내장된 FairPlayed 기본 IPA를 찾을 수 없습니다.";
+                FPLog(@"기본 IPA 템플릿 없음: %@",base);
                 return;
             }
-            [self background:^{
-                FPLog(@"대상 IPA 패키징 시작: %@", target.lastPathComponent);
-                NSError *error = nil;
-                NSString *details = nil;
-                NSString *output = FPPack(base, target, &details, &error);
+            NSString *target=self.lastIPA;
+            self.packageStatus.text=@"IPA 압축 해제 및 재패키징 중… 앱을 종료하지 마세요.";
+            [self working:^{
+                NSError *error=nil;
+                NSString *detail=nil;
+                FPLog(@"[패키징] 시작: %@",target.lastPathComponent);
+                NSString *output=FPPack(base,target,&detail,&error);
                 if (output) {
-                    FPLog(@"%@\n서명 후 같은 앱을 재설치해야 복호화할 수 있습니다.", details);
-                    dispatch_async(dispatch_get_main_queue(), ^{ self.resultIPA = output; });
-                } else FPLog(@"패키징 실패: %@", error.localizedDescription ?: @"원인 불명");
+                    FPLog(@"[패키징] %@ — 다음 단계: ③ 공유 → SideStore 재설치 → 복호화 탭",detail);
+                    dispatch_async(dispatch_get_main_queue(),^{
+                        self.resultIPA=output;
+                        self.packageStatus.text=@"생성 완료. 아래 ‘③ IPA 공유’에서 SideStore로 내보내세요.";
+                    });
+                } else {
+                    FPLog(@"[패키징 오류] %@",error.localizedDescription ?: @"알 수 없는 오류");
+                    dispatch_async(dispatch_get_main_queue(),^{
+                        self.packageStatus.text=[NSString stringWithFormat:@"생성 실패: %@",error.localizedDescription ?: @"원인 불명"];
+                    });
+                }
             }];
             break;
         }
-        case 2: {
-            if (self.busy || ![self hasEmbeddedTarget]) return;
+        case 12: {
+            if (self.resultIPA.length && [NSFileManager.defaultManager fileExistsAtPath:self.resultIPA])
+                [self sharePaths:@[[NSURL fileURLWithPath:self.resultIPA]] from:sender];
+            break;
+        }
+        case 13: {
+            if (self.busy) return;
             if (FPRunningAsLiveContainerGuest()) {
-                FPLog(@"LiveContainer 내부에서는 복호화가 차단됩니다. SideStore로 독립 설치해 주세요.");
+                FPLog(@"[복호화 차단] LiveContainer 내부 실행. SideStore로 직접 설치해야 합니다.");
+                self.selectedIndex=2;
                 return;
             }
-            [self background:^{
-                FPLog(@"내장 앱 복호화 시작 (iOS 27.2.1에서는 실험적)");
+            if (![self hasEmbeddedTarget]) {
+                FPLog(@"[복호화 차단] 내장된 대상 앱 없음. ①~③ 순서로 재패키징 및 SideStore 재설치하세요.");
+                return;
+            }
+            self.decryptStatus.text=@"복호화 중입니다. 완료 후 실패 개수와 PARTIAL 여부를 확인하세요.";
+            [self working:^{
                 [FPRunner logEnvironment];
                 [FPRunner embeddedExport];
-                FPLog(@"복호화 결과는 파일 앱의 FairPlayed 패커 / Decrypted에서 확인하세요.");
+                NSArray *results=[self resultFiles];
+                BOOL complete=[self hasCompleteResult];
+                FPLog(complete ? @"[복호화] 결과 IPA 발견. 로그를 검토하세요." :
+                      @"[복호화 경고] 완전 복호화된 IPA가 없습니다. PARTIAL IPA는 설치하지 마세요.");
+                dispatch_async(dispatch_get_main_queue(),^{
+                    self.decryptStatus.text=complete ? @"완료된 IPA가 있습니다. 로그 검증 후 ⑤에서 공유하세요." :
+                                                     @"완전 복호화 실패: 로그에서 실패한 프레임워크를 확인하세요.";
+                    self.shareResultButton.enabled=results.count>0;
+                });
             }];
             break;
         }
-        case 3: {
-            if (self.busy) return;
-            NSMutableArray *items = NSMutableArray.array;
-            if (self.resultIPA && [NSFileManager.defaultManager fileExistsAtPath:self.resultIPA])
-                [items addObject:[NSURL fileURLWithPath:self.resultIPA]];
-            NSString *dir = [DocsDir() stringByAppendingPathComponent:@"Decrypted"];
-            for (NSString *file in [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil])
-                if ([file.pathExtension.lowercaseString isEqualToString:@"ipa"])
-                    [items addObject:[NSURL fileURLWithPath:[dir stringByAppendingPathComponent:file]]];
-            NSString *logPath = [DocsDir() stringByAppendingPathComponent:@"fairplayed.log"];
-            if ([NSFileManager.defaultManager fileExistsAtPath:logPath]) [items addObject:[NSURL fileURLWithPath:logPath]];
-            if (!items.count) { FPLog(@"아직 공유할 출력 파일이 없습니다."); return; }
-            UIActivityViewController *share = [[UIActivityViewController alloc] initWithActivityItems:items applicationActivities:nil];
-            share.popoverPresentationController.sourceView = b;
-            [self presentViewController:share animated:YES completion:nil];
+        case 14: {
+            NSArray<NSURL *> *result=[self resultFiles];
+            if (!result.count) { FPLog(@"아직 복호화 결과 IPA가 없습니다."); return; }
+            if (![self hasCompleteResult]) {
+                UIAlertController *warning=[UIAlertController alertControllerWithTitle:@"부분 복호화 파일" message:@"현재 파일에는 복호화 실패한 바이너리가 남아 있습니다. LiveContainer에서 실행할 수 없을 수 있습니다. 진단 목적으로만 공유하시겠습니까?" preferredStyle:UIAlertControllerStyleAlert];
+                [warning addAction:[UIAlertAction actionWithTitle:@"취소" style:UIAlertActionStyleCancel handler:nil]];
+                [warning addAction:[UIAlertAction actionWithTitle:@"파일 공유" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){[self sharePaths:result from:sender];}]];
+                [self.selectedViewController presentViewController:warning animated:YES completion:nil];
+            } else [self sharePaths:result from:sender];
+            break;
+        }
+        case 15: self.selectedIndex=2; break;
+        case 16: {
+            NSString *path=[DocsDir() stringByAppendingPathComponent:@"fairplayed.log"];
+            if ([NSFileManager.defaultManager fileExistsAtPath:path])
+                [self sharePaths:@[[NSURL fileURLWithPath:path]] from:sender];
             break;
         }
     }
 }
 - (void)documentPicker:(UIDocumentPickerViewController *)picker didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    NSURL *url = urls.firstObject;
-    if (!url || self.busy) return;
-    [self setBusyUI:YES];
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        BOOL scope = [url startAccessingSecurityScopedResource];
-        NSString *dst = [DocsDir() stringByAppendingPathComponent:@"Encrypted-input.ipa"];
-        NSString *tmp = [dst stringByAppendingString:@".incoming"];
-        NSFileManager *fm = NSFileManager.defaultManager;
-        [fm removeItemAtPath:tmp error:nil];
-        NSError *error = nil;
-        BOOL copied = [fm copyItemAtURL:url toURL:[NSURL fileURLWithPath:tmp] error:&error];
-        if (scope) [url stopAccessingSecurityScopedResource];
-        if (copied) {
-            [fm removeItemAtPath:dst error:nil];
-            copied = [fm moveItemAtPath:tmp toPath:dst error:&error];
+    NSURL *source=urls.firstObject;
+    if (!source || self.busy) return;
+    self.busy=YES;
+    [self.spinner startAnimating];
+    [self refresh];
+    self.packageStatus.text=@"선택한 IPA를 가져오는 중…";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+        BOOL access=[source startAccessingSecurityScopedResource];
+        NSString *dest=[DocsDir() stringByAppendingPathComponent:@"Encrypted-input.ipa"];
+        NSString *temporary=[dest stringByAppendingString:@".incoming"];
+        NSFileManager *fm=NSFileManager.defaultManager;
+        [fm removeItemAtPath:temporary error:nil];
+        NSError *error=nil;
+        BOOL ok=[fm copyItemAtURL:source toURL:[NSURL fileURLWithPath:temporary] error:&error];
+        if (access) [source stopAccessingSecurityScopedResource];
+        if (ok) {
+            [fm removeItemAtPath:dest error:nil];
+            ok=[fm moveItemAtPath:temporary toPath:dest error:&error];
         }
-        if (!copied) [fm removeItemAtPath:tmp error:nil];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (copied) {
-                self.lastIPA = dst;
-                FPLog(@"암호화 IPA 등록: %@ (%.1f MB)", url.lastPathComponent,
-                      [[fm attributesOfItemAtPath:dst error:nil] fileSize] / 1048576.0);
-            } else FPLog(@"IPA 가져오기 실패: %@", error.localizedDescription ?: @"파일 복사 실패");
-            [self setBusyUI:NO];
+        if (!ok) [fm removeItemAtPath:temporary error:nil];
+        dispatch_async(dispatch_get_main_queue(),^{
+            self.busy=NO;
+            [self.spinner stopAnimating];
+            if (ok) {
+                self.lastIPA=dest;
+                self.resultIPA=nil;
+                self.packageStatus.text=@"IPA 등록 완료. ② 서명용 IPA 만들기를 실행하세요.";
+                FPLog(@"[입력 완료] %@ (%.1f MB)",source.lastPathComponent,
+                       [[fm attributesOfItemAtPath:dest error:nil] fileSize]/1048576.0);
+            } else {
+                self.packageStatus.text=[NSString stringWithFormat:@"IPA 복사 실패: %@",error.localizedDescription ?: @"파일 오류"];
+                FPLog(@"[입력 오류] %@",error.localizedDescription ?: @"파일 복사 실패");
+            }
+            [self refresh];
         });
     });
 }
@@ -869,7 +1070,7 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
 @implementation SceneDelegate
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)opts {
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
-    self.window.rootViewController = [FPViewController new];
+    self.window.rootViewController = [FPWorkspace new];
     [self.window makeKeyAndVisible];
 }
 @end
