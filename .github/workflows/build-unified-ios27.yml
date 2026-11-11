@@ -46,7 +46,7 @@ jobs:
             -IFairPlayed/FairPlayed \
             -fobjc-arc -fblocks -O2 -std=gnu17 \
             -framework UIKit -framework Foundation \
-            -framework UniformTypeIdentifiers \
+            -framework UniformTypeIdentifiers -framework QuartzCore \
             -lz \
             Packer/UnifiedMain.m \
             FairPlayed/FairPlayed/fpcore.c \
