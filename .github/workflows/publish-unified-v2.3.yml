@@ -38,7 +38,7 @@ jobs:
           unzip -t "$RUNNER_TEMP/$IPA_FILE" | tail -1
           unzip -Z -1 "$RUNNER_TEMP/$IPA_FILE" | grep -Fx 'Payload/FairPlayedPacker.app/FairPlayedPacker'
           unzip -Z -1 "$RUNNER_TEMP/$IPA_FILE" | grep -Fx 'Payload/FairPlayedPacker.app/FairPlayed-base-template.ipa'
-          unzip -p "$RUNNER_TEMP/$IPA_FILE" Payload/FairPlayedPacker.app/Info.plist | grep -q '<string>2.1</string>'
+          unzip -p "$RUNNER_TEMP/$IPA_FILE" Payload/FairPlayedPacker.app/Info.plist | grep -q '<string>2.3</string>'
           unzip -p "$RUNNER_TEMP/$IPA_FILE" Payload/FairPlayedPacker.app/FairPlayedPacker > "$RUNNER_TEMP/executable"
           strings "$RUNNER_TEMP/executable" | grep -Fq UIGlassEffect
           sha256sum "$RUNNER_TEMP/$IPA_FILE"
