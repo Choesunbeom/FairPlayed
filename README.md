@@ -185,10 +185,11 @@ Pull requests are welcome. Bug fixes, compatibility improvements, documentation 
 
 **반드시 [한국어 설치·재패키징 안내](docs/IPHONE_KO.md)를 먼저 읽어 주세요.** 기본 FairPlayed IPA만 설치해도 App Store 앱이 바로 복호화되는 것은 아닙니다. 대상 IPA를 먼저 포함해 서명해야 하며, iOS 27.2.1에서 실제 복호화 성공은 아직 확인되지 않았습니다.
 
-## 🇰🇷 FairPlayed 통합 패커 2.0
+## 🇰🇷 FairPlayed 통합 패커 2.3 — Liquid Glass
 
-이 포크는 **FairPlayed 복호화 엔진과 기본 IPA 템플릿을 내장**한 단일 아이폰용 앱을 제공합니다. 사용자가 선택하는 입력은 **암호화된 App Store IPA 하나**입니다.
+이 포크는 **FairPlayed 복호화 엔진과 기본 IPA 템플릿을 내장**한 단일 아이폰용 앱을 제공합니다. 하단 Liquid Glass 메뉴바에서 패키징, 복호화, 로그를 분리하고 ①~⑤ 순서대로 안내합니다. 초소형 프레임워크 복호화 결과를 위한 실험 모드(기본 OFF)도 포함되어 있습니다. 사용자가 선택하는 입력은 **암호화된 App Store IPA 하나**입니다.
 
+- [통합 v2.3 IPA 직접 다운로드](https://github.com/Choesunbeom/FairPlayed/releases/download/unified-v2.3/FairPlayed-Unified-v2.3-unsigned.ipa)
 - [통합 앱 IPA 자동 빌드](https://github.com/Choesunbeom/FairPlayed/actions/workflows/build-unified-ios27.yml)
 - [한국어 사용 방법 및 재설치 제약 설명](docs/UNIFIED_KO.md)
 - [통합 앱 코드](Packer/UnifiedMain.m)
