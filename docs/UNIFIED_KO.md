@@ -1,40 +1,45 @@
-# FairPlayed 통합 패커 2.0 — iPhone 독립 실행 버전
+# FairPlayed 통합 패커 2.3 — 아이폰 단독 패키징과 복호화 실험
 
-**목표:** 아이폰에서 암호화된 App Store IPA **하나만 선택**해 SideStore용 미서명 IPA를 만들고, **그 IPA를 설치한 뒤 동일한 FairPlayed 통합 앱에서 복호화 결과를 내보내는 앱**입니다.
+빌드: **Xcode 27.1 / iOS 27.1 SDK**, ARM64. 설치: **SideStore에서 독립 설치**. LiveContainer 안에 통합 앱을 설치하면 FairPlay 복호화가 불가능합니다.
 
-## 핵심 구조
+## 변경된 메뉴 구성
 
-FairPlayed 원본 C/Objective-C 복호화 엔진(`fpcore.c`, `main.m`의 `FPRunner`)과 IPA 패커를 단일 실행 파일로 빌드했습니다.
+- **패키징** — ① 암호화된 IPA 선택 → ② 서명용 IPA 만들기 → ③ IPA 공유 및 SideStore 서명·재설치
+- **복호화** — ④ 내장된 앱 복호화 → ⑤ 결과 확인 및 공유
+- **로그** — 전체 실행·오류 기록 보기 및 로그 파일 내보내기
 
-빌드할 때 **앱 자체의 깨끗한 IPA 템플릿**(`FairPlayed-base-template.ipa`)을 앱 리소스에 내장하므로, **기본 FairPlayed IPA 파일을 따로 선택할 필요가 없습니다.** 템플릿도 완성된 재패키징 IPA에 보존되어, 다른 앱을 선택할 때 다시 사용할 수 있습니다.
+작업 화면에서 **IPA 생성 버튼과 실시간 로그는 같은 '작업 진행' 영역에 별도 패널로 배치**했습니다. iOS 26 이상은 Xcode 27.1 SDK의 기본 UITabBar Liquid Glass 디자인과 UIGlassEffect를 사용하며, 이전 버전은 시스템 블러를 사용합니다.
 
-## 사용 방법
+## 설치 및 사용
 
-1. [통합 앱 자동 빌드](https://github.com/Choesunbeom/FairPlayed/actions/workflows/build-unified-ios27.yml) 성공 기록의 아티팩트에서 `FairPlayedUnified-iOS27.1-unsigned.ipa`를 다운로드합니다.
-2. 아이폰에서 **SideStore로 서명 및 설치**합니다.
-3. 통합 앱에서 **① 암호화된 IPA 선택** → iPadn에서 받은, 본인 Apple ID 라이선스가 있는 앱의 IPA를 선택합니다.
-4. **② 서명용 IPA 만들기**를 누릅니다. 이 단계는 복호화가 아니라 앱을 **재패키징**하는 작업입니다.
-5. **④ IPA · 결과 파일 공유**를 눌러 `FairPlayed-target-unsigned.ipa`를 SideStore로 보내거나 파일 앱에 저장합니다.
-6. **SideStore로 생성된 IPA를 서명해 재설치합니다.** 같은 번들 ID를 사용하므로 같은 서명 팀이라면 덮어씌우기가 가능할 수 있지만, 중요한 파일은 먼저 백업하세요. 설치 시 데이터 보존은 환경에 따라 다릅니다.
-7. 다시 실행한 통합 앱에 **내장 대상 앱 발견**이라고 표시되면 **③ 내장 앱 복호화**를 눌러 복호화를 시도합니다.
-8. **④ IPA · 결과 파일 공유** 또는 파일 앱의 FairPlayed 통합 → Decrypted 폴더에서 출력된 IPA와 로그를 확인합니다.
+1. [통합 패커 최신 GitHub Release](https://github.com/Choesunbeom/FairPlayed/releases)에서 `FairPlayed-Unified-v2.3-unsigned.ipa`를 다운로드합니다.
+2. **SideStore를 열어 미서명 IPA를 서명하고 홈 화면에 설치**합니다. 실행 위치가 `/Documents/Applications/`라면 LiveContainer 게스트이므로 복호화할 수 없습니다.
+3. '패키징'에서 iPadn이 내려받은, 본인 계정이 합법적으로 보유한 암호화 IPA를 선택합니다.
+4. '② 서명용 IPA 만들기' → '③ IPA 공유'로 생성된 `FairPlayed-target-unsigned.ipa`를 내보냅니다.
+5. **SideStore에서 생성된 IPA를 다시 서명해 설치**하고 홈 화면에서 실행합니다. 동일 앱의 데이터를 보존하려면 중요한 파일을 먼저 백업하세요.
+6. 하단 '복호화' 메뉴에서 '④ 복호화 실행'을 누릅니다.
+7. 로그에서 실패 개수와 파일명을 확인하고, '⑤ 결과 내보내기'에서 IPA를 공유합니다.
 
-> **왜 재설치가 필요한가요?** 원본 FairPlayed의 FairPlay 복호화 실험은 대상 바이너리와 SINF가 **서명·설치된 앱 번들 내에 있어야** 합니다. 패커가 현재 실행 중인 앱의 **데이터 폴더**에 대상 IPA를 풀어 놓기만 해서는 FairPlay 서비스가 읽지 못합니다. 따라서 탈옥하지 않은 일반 아이폰에서는 한 번의 재서명/재설치가 필요합니다. **재설치 없는 즉시 복호화는 현재 제공하지 않습니다.**
+## NAVER Map 6.12.3 로그 원인
 
-## 기술
+사용자가 제공한 **실기기 iOS 27.2.1** 로그에는 실행 파일 115개가 복호화되고 2개는 원래 암호화되지 않았지만 **6개가 실패**했습니다. 실패 항목에는 `Frameworks/AppServiceObjC.framework/AppServiceObjC`가 포함됩니다. LiveContainer의 `could not register fairplay decryption, mremap_encrypted() => -1` 오류는 앱 내부에 암호화 상태의 프레임워크가 남아 있음을 나타냅니다.
 
-- 컴파일: Xcode **27.1**, iOS **27.1 SDK** (워크플로에서 버전 검사)
-- 실행 기기: iPhone ARM64, iOS 17 이상 최소 타깃
-- 입력: 파일 앱에서 암호화된 IPA 1개 선택
-- 출력: `FairPlayed-target-unsigned.ipa` (서명 필요), 성공 시 `Decrypted/<app>-decrypted.ipa`
-- 앱 자체에는 암호화 해제 기능이 포함되어 있지만 **iOS 27.2.1에서 실제 성공은 미검증**
-- 출력이 `-PARTIAL.ipa`이면 일부 바이너리가 복호화되지 않았음을 뜻합니다.
-- 원본 [FairPlayed](https://github.com/morzelowski/FairPlayed)는 iOS 27.0.1에서 동작을 보고했습니다.
+6개 모두 1페이지(4KB) 암호화 구간이었고, FairPlay 커널 호출과 읽기는 성공했으나 결과의 ARM64 RET 명령어 탐지 수가 0개여서 원본 코드의 검증 규칙을 통과하지 못했습니다.
 
-## 유의사항
+### 초소형 프레임워크 실험 모드
 
-대용량 게임의 IPA를 압축 해제할 때 추가 저장 공간이 상당히 필요합니다. 개발자 서명/SideStore 서명 중 앱의 내장 SINF 리소스가 유지되어야 원본 FairPlayed 복호화 실험을 할 수 있습니다. 이 앱 자체가 Apple ID 로그인을 요구하거나 FairPlay 라이선스를 생성하지는 않습니다.
+v2.3에는 **기본 OFF**인 '초소형 프레임워크 실험 모드'가 있습니다. 켜면 단 1페이지 영역에 대해 FairPlay 매핑·전체 페이지 읽기 성공, 암호문에서 바뀜, 복호화 후 엔트로피 1.0 미만 등의 엄격한 조건을 만족할 때 **추정 복호화**로 받아들입니다.
 
-자신이 사용 허가를 가진 앱만 다루고, 계정 비밀번호나 개인 IPA 파일을 공개 GitHub 저장소에 업로드하지 마세요.
+이 데이터가 실행 가능한 코드임을 보장하지 않으므로, 모드가 실제로 사용된 출력은 `-EXPERIMENTAL.ipa`로 표시합니다. 하나라도 통과하지 못한 바이너리가 남으면 `-PARTIAL.ipa`로 표시합니다. **EXPERIMENTAL과 PARTIAL은 복호화 완료가 검증된 파일이 아닙니다.** 실제 LiveContainer 실행 성공 여부를 관찰해야 합니다.
 
-이 포크의 iPhone 통합 앱 코드는 [Packer/UnifiedMain.m](../Packer/UnifiedMain.m)에 있습니다.
+표준 모드(실험 옵션 OFF)로 먼저 시도하고, 기존 오류가 계속될 때에만 실험 모드에서 재시도해 결과 로그를 비교해 주세요. iOS 27.2.1에서 안정적인 작동은 아직 실기기로 검증되지 않았습니다.
+
+## 주의
+
+- 출처/버전에 따라 IPA의 내부 프레임워크와 Apple 라이선스 구조가 달라 성공을 보장할 수 없습니다.
+- 단순히 `cryptid`를 0으로 바꾸는 방법은 복호화가 아니므로 사용하지 않습니다.
+- `-PARTIAL.ipa`, `-EXPERIMENTAL.ipa`는 검사·연구 목적이며 완전한 결과로 안내하지 않습니다.
+- 앱 공유 폴더에는 큰 IPA와 여러 임시 복사본이 생길 수 있어 충분한 저장 공간이 필요합니다.
+- 공개 GitHub 저장소에 IPA, Apple 계정 토큰, 프로비저닝 인증서를 업로드하지 마세요.
+
+원본 FairPlayed: https://github.com/morzelowski/FairPlayed
