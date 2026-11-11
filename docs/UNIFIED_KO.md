@@ -1,45 +1,54 @@
-# FairPlayed 통합 패커 2.3 — 아이폰 단독 패키징과 복호화 실험
+# daru 2.4 — iOS IPA 패커 및 FairPlayed 실험
 
-빌드: **Xcode 27.1 / iOS 27.1 SDK**, ARM64. 설치: **SideStore에서 독립 설치**. LiveContainer 안에 통합 앱을 설치하면 FairPlay 복호화가 불가능합니다.
+**앱 이름:** daru  
+**아이콘:** 사용자가 제공한 검은 고양이 이미지 (원본 그대로, 시스템용 정사각형 아이콘으로 변환)  
+**빌드 환경:** Xcode 27.1 / iOS 27.1 SDK / ARM64  
+**설치:** SideStore로 미서명 IPA 서명 및 홈 화면 독립 설치
 
-## 변경된 메뉴 구성
+## 달라진 점
 
-- **패키징** — ① 암호화된 IPA 선택 → ② 서명용 IPA 만들기 → ③ IPA 공유 및 SideStore 서명·재설치
-- **복호화** — ④ 내장된 앱 복호화 → ⑤ 결과 확인 및 공유
-- **로그** — 전체 실행·오류 기록 보기 및 로그 파일 내보내기
+### 1. iOS 파일 앱의 '최근 항목' 화면이 멈출 때
 
-작업 화면에서 **IPA 생성 버튼과 실시간 로그는 같은 '작업 진행' 영역에 별도 패널로 배치**했습니다. iOS 26 이상은 Xcode 27.1 SDK의 기본 UITabBar Liquid Glass 디자인과 UIGlassEffect를 사용하며, 이전 버전은 시스템 블러를 사용합니다.
+v2.3에서 '파일 앱에서 IPA 선택'을 누르면 iOS의 파일 선택기 '최근 항목' 화면이 빈 채로 멈추는 사례가 있었습니다. IPA를 선택하기 **전**에 발생하는 현상이므로, 압축 처리 문제와 다릅니다.
 
-## 설치 및 사용
+v2.4에서는 파일 선택기를 **전체 화면**으로 띄우고 지원 확장자를 IPA/ZIP로 제한했습니다. 복사 방식도 iOS가 제공하는 문서 접근 방식으로 변경했습니다. 다만 iOS 파일 제공자 자체의 오류까지 앱에서 완전히 해결한다고 보장할 수는 없습니다.
 
-1. [통합 패커 최신 GitHub Release](https://github.com/Choesunbeom/FairPlayed/releases)에서 `FairPlayed-Unified-v2.3-unsigned.ipa`를 다운로드합니다.
-2. **SideStore를 열어 미서명 IPA를 서명하고 홈 화면에 설치**합니다. 실행 위치가 `/Documents/Applications/`라면 LiveContainer 게스트이므로 복호화할 수 없습니다.
-3. '패키징'에서 iPadn이 내려받은, 본인 계정이 합법적으로 보유한 암호화 IPA를 선택합니다.
-4. '② 서명용 IPA 만들기' → '③ IPA 공유'로 생성된 `FairPlayed-target-unsigned.ipa`를 내보냅니다.
-5. **SideStore에서 생성된 IPA를 다시 서명해 설치**하고 홈 화면에서 실행합니다. 동일 앱의 데이터를 보존하려면 중요한 파일을 먼저 백업하세요.
-6. 하단 '복호화' 메뉴에서 '④ 복호화 실행'을 누릅니다.
-7. 로그에서 실패 개수와 파일명을 확인하고, '⑤ 결과 내보내기'에서 IPA를 공유합니다.
+그 경우 앱 내 **'daru 폴더의 IPA 선택 (안정적)'** 버튼을 사용하세요.
 
-## NAVER Map 6.12.3 로그 원인
+1. 아이폰 **파일 앱**을 엽니다.
+2. 다운로드한 IPA를 길게 누르고 **이동** 또는 **복사**를 선택합니다.
+3. **나의 iPhone → daru** 폴더로 IPA를 복사합니다. daru를 한 번 실행하면 폴더 안에 `IPA를 이 폴더에 복사하세요.txt`가 생성됩니다.
+4. daru의 **패키징 탭 → daru 폴더의 IPA 선택 (안정적)**을 누릅니다.
+5. 나타나는 파일 이름을 선택합니다. 이 방식은 iOS의 '최근 항목' 파일 선택기를 전혀 사용하지 않습니다.
 
-사용자가 제공한 **실기기 iOS 27.2.1** 로그에는 실행 파일 115개가 복호화되고 2개는 원래 암호화되지 않았지만 **6개가 실패**했습니다. 실패 항목에는 `Frameworks/AppServiceObjC.framework/AppServiceObjC`가 포함됩니다. LiveContainer의 `could not register fairplay decryption, mremap_encrypted() => -1` 오류는 앱 내부에 암호화 상태의 프레임워크가 남아 있음을 나타냅니다.
+또는 파일 앱에서 IPA를 **공유 → daru에서 열기**를 선택하는 방식도 추가했습니다. 파일 공유 목록에 앱이 표시되는지는 iOS 파일 형식 등록과 SideStore 서명 상태에 따라 달라질 수 있습니다.
 
-6개 모두 1페이지(4KB) 암호화 구간이었고, FairPlay 커널 호출과 읽기는 성공했으나 결과의 ARM64 RET 명령어 탐지 수가 0개여서 원본 코드의 검증 규칙을 통과하지 못했습니다.
+### 2. UI
 
-### 초소형 프레임워크 실험 모드
+하단에는 iOS 27 기본 Liquid Glass 탭바가 유지됩니다.
 
-v2.3에는 **기본 OFF**인 '초소형 프레임워크 실험 모드'가 있습니다. 켜면 단 1페이지 영역에 대해 FairPlay 매핑·전체 페이지 읽기 성공, 암호문에서 바뀜, 복호화 후 엔트로피 1.0 미만 등의 엄격한 조건을 만족할 때 **추정 복호화**로 받아들입니다.
+- **패키징:** ① 암호화 IPA 선택 → ② 서명용 IPA 만들기 → ③ 생성 IPA 공유 및 SideStore 재서명·재설치
+- **복호화:** ④ 내장 앱 복호화 → ⑤ 복호화 결과 공유
+- **로그:** 전체 로그와 파일 공유
 
-이 데이터가 실행 가능한 코드임을 보장하지 않으므로, 모드가 실제로 사용된 출력은 `-EXPERIMENTAL.ipa`로 표시합니다. 하나라도 통과하지 못한 바이너리가 남으면 `-PARTIAL.ipa`로 표시합니다. **EXPERIMENTAL과 PARTIAL은 복호화 완료가 검증된 파일이 아닙니다.** 실제 LiveContainer 실행 성공 여부를 관찰해야 합니다.
+IPA 생성 버튼과 실시간 로그는 같은 '작업 진행' 영역에서 각각 독립 패널로 표시됩니다.
 
-표준 모드(실험 옵션 OFF)로 먼저 시도하고, 기존 오류가 계속될 때에만 실험 모드에서 재시도해 결과 로그를 비교해 주세요. iOS 27.2.1에서 안정적인 작동은 아직 실기기로 검증되지 않았습니다.
+### 3. 기존 앱 데이터
 
-## 주의
+앱의 `CFBundleIdentifier`는 **com.choesunbeom.fairplayedpacker**로 유지했습니다. SideStore 서명 팀과 기기 상태가 동일하면 업데이트 설치가 가능할 수 있습니다. 그래도 기존 작업 파일은 반드시 백업하세요.
 
-- 출처/버전에 따라 IPA의 내부 프레임워크와 Apple 라이선스 구조가 달라 성공을 보장할 수 없습니다.
-- 단순히 `cryptid`를 0으로 바꾸는 방법은 복호화가 아니므로 사용하지 않습니다.
-- `-PARTIAL.ipa`, `-EXPERIMENTAL.ipa`는 검사·연구 목적이며 완전한 결과로 안내하지 않습니다.
-- 앱 공유 폴더에는 큰 IPA와 여러 임시 복사본이 생길 수 있어 충분한 저장 공간이 필요합니다.
-- 공개 GitHub 저장소에 IPA, Apple 계정 토큰, 프로비저닝 인증서를 업로드하지 마세요.
+### 4. 복호화 관련 제한
 
-원본 FairPlayed: https://github.com/morzelowski/FairPlayed
+패커는 FairPlayed 엔진과 기본 IPA 템플릿을 내장합니다. 암호화된 IPA 하나를 선택하고 **서명용 IPA를 먼저 만들고**, 해당 출력물을 SideStore로 직접 설치한 뒤 복호화 메뉴로 돌아와야 합니다.
+
+LiveContainer 안에 daru 자체를 설치한 상태에서는 FairPlay 서비스가 내장 IPA에 접근하지 못합니다. 정상 설치하더라도 일부 프레임워크 복호화에 실패하면 출력은 `-PARTIAL.ipa` 또는 `-EXPERIMENTAL.ipa`로 남습니다. 이 파일은 LiveContainer에서 정상 실행된다는 보장이 없습니다.
+
+iOS 27.2.1 실제 기기에서 완전 복호화 성공은 아직 검증되지 않았습니다.
+
+## 코드/빌드
+
+- [통합 빌드 워크플로](https://github.com/Choesunbeom/FairPlayed/actions/workflows/build-unified-ios27.yml)
+- [daru 앱 소스](https://github.com/Choesunbeom/FairPlayed/blob/main/Packer/UnifiedMain.m)
+- [아이콘 원본](https://github.com/Choesunbeom/FairPlayed/blob/main/Packer/Assets/daru-cat.png)
+
+다른 사람의 Apple 계정 인증정보와 개인 소유 IPA를 공개 저장소에 업로드하지 마세요.
