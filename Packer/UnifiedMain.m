@@ -436,6 +436,7 @@ static NSString *WorkDir(void) {
         [self copyTree:src to:appDst skipped:skipped];
         FPLog(@"copied bundle; skipped %lu item(s): %@", (unsigned long)skipped.count, [skipped componentsJoinedByString:@", "]);
         int dec = 0, plain = 0, fail = 0;
+        fp_reset_tiny_stub_count();
         NSMutableArray *failed = [NSMutableArray array];
         for (NSString *rel in [self machOsUnder:src]) @autoreleasepool {
             int r = fp_decrypt_file([src stringByAppendingPathComponent:rel].fileSystemRepresentation,
@@ -445,12 +446,15 @@ static NSString *WorkDir(void) {
         }
         NSString *outDir = [DocsDir() stringByAppendingPathComponent:@"Decrypted"];
         [fm createDirectoryAtPath:outDir withIntermediateDirectories:YES attributes:nil error:nil];
-        NSString *ipa = [outDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@%@.ipa", name, fail ? @"-PARTIAL" : @"-decrypted"]];
+        unsigned tentative = fp_tiny_stub_count();
+        NSString *suffix = fail ? @"-PARTIAL" : tentative ? @"-EXPERIMENTAL" : @"-decrypted";
+        NSString *ipa = [outDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@%@.ipa", name, suffix]];
+        if (tentative) FPLog(@"[주의] 저코드 1페이지 프레임워크 %u개는 실험 판정입니다. 복호화 완료로 검증된 것이 아닙니다.", tentative);
         [fm removeItemAtPath:ipa error:nil];
         char zerr[512] = {0};
         int zr = zip_create_from_dir(work.fileSystemRepresentation, ipa.fileSystemRepresentation, zerr, sizeof zerr);
         [fm removeItemAtPath:work error:nil];
-        FPLog(@"=== %@: %d decrypted, %d not encrypted, %d failed%@; %@ ===", name, dec, plain, fail,
+        FPLog(@"=== %@: %d decrypted, %d not encrypted, %d failed, %u experimental%@; %@ ===", name, dec, plain, fail, tentative,
               fail ? [NSString stringWithFormat:@" (%@)", [failed componentsJoinedByString:@", "]] : @"",
               zr == 0 ? [@"wrote " stringByAppendingString:ipa.lastPathComponent] : [NSString stringWithFormat:@"zip failed: %s", zerr]);
     }
@@ -634,6 +638,7 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
 @property(nonatomic,strong) UIButton *generateButton;
 @property(nonatomic,strong) UIButton *sharePackageButton;
 @property(nonatomic,strong) UIButton *decryptButton;
+@property(nonatomic,strong) UISwitch *stubModeSwitch;
 @property(nonatomic,strong) UIButton *shareResultButton;
 @property(nonatomic,strong) UIActivityIndicatorView *spinner;
 @property(nonatomic,strong) UITextView *inlineLog;
@@ -845,6 +850,19 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     [decryptCard addArrangedSubview:[self label:@"④ 내장된 앱 복호화" size:19 strong:YES]];
     self.decryptStatus=[self label:@"재설치한 앱의 내장 페이로드를 확인합니다." size:14 strong:NO];
     [decryptCard addArrangedSubview:self.decryptStatus];
+    UIView *line=[self divider];
+    [decryptCard addArrangedSubview:line];
+    UIStackView *tinyRow=[self stack];
+    tinyRow.axis=UILayoutConstraintAxisHorizontal;
+    tinyRow.alignment=UIStackViewAlignmentCenter;
+    tinyRow.distribution=UIStackViewDistributionFill;
+    UILabel *tinyLabel=[self label:@"초소형 프레임워크 실험 모드" size:14 strong:YES];
+    [tinyRow addArrangedSubview:tinyLabel];
+    self.stubModeSwitch=UISwitch.new;
+    self.stubModeSwitch.on=NO;
+    [tinyRow addArrangedSubview:self.stubModeSwitch];
+    [decryptCard addArrangedSubview:tinyRow];
+    [decryptCard addArrangedSubview:[self label:@"기본값은 꺼짐. 1페이지 복호화 결과가 거의 0일 때만 제한적으로 허용하며, 결과는 EXPERIMENTAL IPA로 표시됩니다. 실행 성공을 보장하지 않습니다." size:12 strong:NO]];
     self.decryptButton=[self button:@"복호화 실행" symbol:@"lock.open" tag:13 primary:YES];
     [decryptCard addArrangedSubview:self.decryptButton];
     [dec addArrangedSubview:decryptCard];
@@ -987,10 +1005,14 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
                 FPLog(@"[복호화 차단] 내장된 대상 앱 없음. ①~③ 순서로 재패키징 및 SideStore 재설치하세요.");
                 return;
             }
-            self.decryptStatus.text=@"복호화 중입니다. 완료 후 실패 개수와 PARTIAL 여부를 확인하세요.";
+            BOOL experimental=self.stubModeSwitch.isOn;
+            self.decryptStatus.text=@"복호화 중입니다. 완료 후 실패 수 및 EXPERIMENTAL 여부를 확인하세요.";
             [self working:^{
+                fp_set_tiny_stub_mode(experimental);
+                FPLog(@"[복호화 모드] %@", experimental ? @"1페이지 실험 허용 (EXPERIMENTAL 결과 가능)" : @"표준 검증");
                 [FPRunner logEnvironment];
                 [FPRunner embeddedExport];
+                fp_set_tiny_stub_mode(false);
                 NSArray *results=[self resultFiles];
                 BOOL complete=[self hasCompleteResult];
                 FPLog(complete ? @"[복호화] 결과 IPA 발견. 로그를 검토하세요." :
@@ -1007,7 +1029,7 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
             NSArray<NSURL *> *result=[self resultFiles];
             if (!result.count) { FPLog(@"아직 복호화 결과 IPA가 없습니다."); return; }
             if (![self hasCompleteResult]) {
-                UIAlertController *warning=[UIAlertController alertControllerWithTitle:@"부분 복호화 파일" message:@"현재 파일에는 복호화 실패한 바이너리가 남아 있습니다. LiveContainer에서 실행할 수 없을 수 있습니다. 진단 목적으로만 공유하시겠습니까?" preferredStyle:UIAlertControllerStyleAlert];
+                UIAlertController *warning=[UIAlertController alertControllerWithTitle:@"부분 복호화 파일" message:@"이 파일은 PARTIAL 또는 EXPERIMENTAL 상태로, 완전한 복호화가 검증되지 않았습니다. LiveContainer 실행에 실패할 수 있습니다. 진단 목적으로 공유하시겠습니까?" preferredStyle:UIAlertControllerStyleAlert];
                 [warning addAction:[UIAlertAction actionWithTitle:@"취소" style:UIAlertActionStyleCancel handler:nil]];
                 [warning addAction:[UIAlertAction actionWithTitle:@"파일 공유" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){[self sharePaths:result from:sender];}]];
                 [self.selectedViewController presentViewController:warning animated:YES completion:nil];
