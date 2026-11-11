@@ -1032,13 +1032,13 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     tinyRow.axis=UILayoutConstraintAxisHorizontal;
     tinyRow.alignment=UIStackViewAlignmentCenter;
     tinyRow.distribution=UIStackViewDistributionFill;
-    UILabel *tinyLabel=[self label:@"초소형 프레임워크 실험 모드" size:14 strong:YES];
+    UILabel *tinyLabel=[self label:@"복호화 호환 모드 (실험)" size:14 strong:YES];
     [tinyRow addArrangedSubview:tinyLabel];
     self.stubModeSwitch=UISwitch.new;
     self.stubModeSwitch.on=NO;
     [tinyRow addArrangedSubview:self.stubModeSwitch];
     [decryptCard addArrangedSubview:tinyRow];
-    [decryptCard addArrangedSubview:[self label:@"기본값은 꺼짐. 1페이지 복호화 결과가 거의 0일 때만 제한적으로 허용하며, 결과는 EXPERIMENTAL IPA로 표시됩니다. 실행 성공을 보장하지 않습니다." size:12 strong:NO]];
+    [decryptCard addArrangedSubview:[self label:@"일반 복호화로 앱이 실행되지 않을 때 켜보세요. 일부 작은 구성 파일도 추가로 처리합니다. 결과에 EXPERIMENTAL이 표시될 수 있으며, 앱 실행 여부는 직접 확인해야 합니다." size:12 strong:NO]];
     self.decryptButton=[self button:@"복호화 실행" symbol:@"lock.open" tag:13 primary:YES];
     [decryptCard addArrangedSubview:self.decryptButton];
     [dec addArrangedSubview:decryptCard];
@@ -1095,7 +1095,7 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     NSString *readme=[DocsDir() stringByAppendingPathComponent:@"IPA를 이 폴더에 복사하세요.txt"];
     if (![NSFileManager.defaultManager fileExistsAtPath:readme])
         [@"파일 앱 → 나의 iPhone → daru 폴더에 .ipa 파일을 복사하세요. daru 앱의 'daru 폴더의 IPA 선택' 버튼으로 가져올 수 있습니다.\n" writeToFile:readme atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    FPLog(@"daru 2.6 · IPA 선택 취소, EXPERIMENTAL 완료 알림, 완료 후 화면 초기화.");
+    FPLog(@"daru 2.7 · 간결한 작업 완료 안내와 쉬운 복호화 호환 모드 설명.");
     if (FPRunningAsLiveContainerGuest())
         FPLog(@"[환경 주의] LiveContainer 안에서는 FairPlay 복호화가 불가능합니다. SideStore 직접 설치하세요.");
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{[FPRunner runEnvironment];});
@@ -1164,8 +1164,8 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
     self.selectedIndex=0;
     [self refresh];
     FPLog(@"[작업 완료] daru 화면 초기화. 내장된 앱은 표시되지 않으며, 복호화 결과 IPA는 파일 앱에 보관됩니다.");
-    UIAlertController *done=[UIAlertController alertControllerWithTitle:@"내보내기 완료"
-        message:@"daru가 초기 화면으로 돌아왔습니다. 복호화 화면에는 '내장된 앱이 없습니다'라고 표시됩니다. 실제 서명된 앱 번들에는 이전 대상 파일이 남아 있으나 화면에서만 숨김 처리됩니다."
+    UIAlertController *done=[UIAlertController alertControllerWithTitle:@"작업 완료"
+        message:@"복호화된 IPA를 내보냈습니다. daru가 시작 화면으로 돌아왔습니다. 새 IPA를 선택해 다음 작업을 시작할 수 있습니다."
         preferredStyle:UIAlertControllerStyleAlert];
     [done addAction:[UIAlertAction actionWithTitle:@"확인" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:done animated:YES completion:nil];
@@ -1305,7 +1305,7 @@ static BOOL FPRunningAsLiveContainerGuest(void) {
                     if (finished && [status isEqualToString:@"EXPERIMENTAL"]) {
                         self.decryptStatus.text=@"EXPERIMENTAL IPA 생성 성공! ⑤에서 내보내면 daru 화면이 초기화됩니다.";
                         UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"복호화 성공 · EXPERIMENTAL"
-                            message:@"EXPERIMENTAL IPA 생성에 성공했습니다. 이 형식은 사용자 환경에서 LiveContainer 실행이 확인됐지만, 모든 앱의 복호화가 검증된 것은 아닙니다. ⑤에서 결과를 내보내면 daru가 초기 화면으로 돌아갑니다."
+                            message:@"IPA가 준비되었습니다. ⑤에서 결과를 저장한 뒤 LiveContainer에서 실행해 보세요. 내보내기가 끝나면 daru는 시작 화면으로 돌아갑니다."
                             preferredStyle:UIAlertControllerStyleAlert];
                         [alert addAction:[UIAlertAction actionWithTitle:@"확인" style:UIAlertActionStyleDefault handler:nil]];
                         [self.selectedViewController presentViewController:alert animated:YES completion:nil];
