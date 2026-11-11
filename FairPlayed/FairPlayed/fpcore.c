@@ -18,6 +18,14 @@
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
 
+// Explicit opt-in for suspicious one-page binaries whose decrypted content
+// contains almost entirely zeros. A valid FairPlay mmap alone is NOT proof
+// that the binary is runnable. Such outputs must remain labelled EXPERIMENTAL.
+static bool g_tiny_stub_mode = false;
+static unsigned g_tiny_stub_count = 0;
+void fp_set_tiny_stub_mode(bool enabled) { g_tiny_stub_mode = enabled; }
+void fp_reset_tiny_stub_count(void) { g_tiny_stub_count = 0; }
+unsigned fp_tiny_stub_count(void) { return g_tiny_stub_count; }
 #pragma mark - mremap_encrypted
 
 typedef int (*mremap_encrypted_fn)(void *, size_t, uint32_t, uint32_t, uint32_t);
@@ -271,11 +279,21 @@ void fp_attempt_describe(const fp_attempt_t *a, char *buf, size_t len) {
              a->ret_before, a->ret_after, a->ent_before, a->ent_after, a->ms);
 }
 
+static bool attempt_is_tiny_stub(const fp_attempt_t *a) {
+    // A 4 KB FairPlay region may contain no executable instructions at all.
+    // That is not verified: only explicit user consent permits treating this
+    // as a tentative output instead of a failure.
+    return g_tiny_stub_mode && a->mremap_ret == 0 && a->pages_total == 1 &&
+           a->pages_ok == 1 && a->changed && a->ent_before > 7.9 &&
+           a->ent_after < 1.0 && a->ret_after == 0;
+}
+
 static bool attempt_looks_decrypted(const fp_attempt_t *a) {
-    // Encrypted text has ~8.0 bits/byte regardless of size; decrypted arm64 code stays below 7.5.
-    // Require only one new RET/PACIBSP word so tiny (1-page) binaries are not rejected.
-    return a->mremap_ret == 0 && a->pages_ok == a->pages_total && a->changed &&
-           a->ent_before > 7.9 && a->ent_after < 7.5 && a->ret_after > a->ret_before;
+    bool valid_mapping = a->mremap_ret == 0 && a->pages_total != 0 &&
+                         a->pages_ok == a->pages_total && a->changed && a->ent_before > 7.9;
+    // Normal verification: decrypted ARM64 instructions include RET/PACIBSP.
+    bool code_verified = a->ent_after < 7.5 && a->ret_after > a->ret_before;
+    return valid_mapping && (code_verified || attempt_is_tiny_stub(a));
 }
 
 int fp_probe_file(const char *path, const int *modes, int nmodes, fp_log_t log, void *ctx) {
@@ -340,6 +358,10 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
             fp_attempt(in_path, s, order[k][0], order[k][1], dec, &a);
             fp_attempt_describe(&a, d, sizeof d);
             done = attempt_looks_decrypted(&a);
+            if (done && attempt_is_tiny_stub(&a)) {
+                g_tiny_stub_count++;
+                logf_(log, ctx, "  slice[%d] [EXPERIMENTAL] 1-page zero-code FairPlay output accepted; runtime NOT verified", i);
+            }
             logf_(log, ctx, "  slice[%d] %s %s", i, done ? "[DECRYPTED]" : "[--]", d);
         }
         if (!done) { rc = -1; free(dec); break; }
