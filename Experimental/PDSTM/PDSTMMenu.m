@@ -515,6 +515,8 @@ static void PDSTMHookClass(Class cls,SEL sel,IMP replacement,IMP *orig,BOOL isCl
 // No user-facing Flex option is registered under PleaseDontStopTheMusic.
 static const char kPDSTMFlexOriginalTransformKey;
 static NSHashTable *pdstmMovedVideoViews;
+static NSHashTable *pdstmMovedControlViews;
+static const char kPDSTMFlexControlOriginalTransformKey;
 static NSTimer *pdstmFlexGlobalTimer;
 static CGRect PDSTMActiveHorizontalHingeInWindow(UIWindow *window) {
     if(!window || window.hidden || ![window respondsToSelector:@selector(reservedRegionsOfKind:options:)])return CGRectNull;
@@ -560,15 +562,16 @@ static void PDSTMFindFullscreenVideo(UIView *root,UIWindow *window,CGRect hinge,
     if(!root || depth>28 || root.hidden || root.alpha<0.03)return;
     NSInteger priority=PDSTMVideoCandidateScore(root);
     if(priority && root.superview) {
-        NSValue *oldTransform=objc_getAssociatedObject(root,&kPDSTMFlexOriginalTransformKey);
-        if(oldTransform)root.transform=oldTransform.CGAffineTransformValue;
+        // All previously applied transforms were restored before scanning.
+        // Never mutate candidate views during a search: v7 could corrupt the
+        // layout of a different renderer when the fullscreen view was rebuilt.
         CGRect rect=[root convertRect:root.bounds toView:window];
         CGFloat width=CGRectGetWidth(rect),height=CGRectGetHeight(rect);
         if(isfinite(width)&&isfinite(height)
            && width>CGRectGetWidth(window.bounds)*0.66
            && height>CGRectGetHeight(window.bounds)*0.16
-           && CGRectGetMinY(rect)<CGRectGetMinY(hinge)+48
-           && CGRectGetMaxY(rect)>CGRectGetMinY(hinge)-48
+           // A reopened fullscreen player can be ENTIRELY below the hinge.
+           // v7's cross-hinge-only filter rejected it and left it at bottom.
            && CGRectIntersectsRect(rect,window.bounds)) {
             // Prefer the actual render surface over its full-screen wrapper.
             CGFloat score=(CGFloat)priority*1000.0
@@ -593,9 +596,159 @@ static void PDSTMRestoreFlexForView(UIView *view) {
     }];
     objc_setAssociatedObject(view,&kPDSTMFlexOriginalTransformKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
+
+// v8: Leave YouTube's native control hierarchy and button actions intact.
+// Move the small visual/control groups, not their fullscreen overlay root.
+// Relocated controls remain interactive because UIKit hit-testing follows
+// transforms on the group. This is intentionally conservative.
+static BOOL PDSTMIsNativeControlOverlay(UIView *view) {
+    NSString *c=NSStringFromClass(view.class);
+    return [c containsString:@"YTMainAppControlsOverlayView"] ||
+           [c containsString:@"YTMainAppVideoPlayerOverlayView"] ||
+           [c containsString:@"YTInlinePlayerBarContainerView"] ||
+           [c containsString:@"YTPlayerControlsOverlay"] ||
+           [c containsString:@"YTFullscreenControls"];
+}
+static BOOL PDSTMIsVideoOrSubtitle(UIView *view) {
+    NSString *c=NSStringFromClass(view.class);
+    return PDSTMVideoCandidateScore(view)>0 ||
+           [c containsString:@"Subtitle"] ||
+           [c containsString:@"Caption"] ||
+           [c containsString:@"TimedText"] ||
+           [c containsString:@"VideoRenderer"] ||
+           [c containsString:@"PlayerLayer"];
+}
+static BOOL PDSTMHasControlContent(UIView *view,NSUInteger depth) {
+    if(!view || depth>6)return NO;
+    if([view isKindOfClass:UIControl.class] ||
+       [view isKindOfClass:UILabel.class])return YES;
+    if(PDSTMIsVideoOrSubtitle(view))return NO;
+    for(UIView *child in view.subviews) {
+        if(PDSTMHasControlContent(child,depth+1))return YES;
+    }
+    return NO;
+}
+static void PDSTMRestoreControl(UIView *view) {
+    NSValue *old=objc_getAssociatedObject(view,&kPDSTMFlexControlOriginalTransformKey);
+    if(old) {
+        view.transform=old.CGAffineTransformValue;
+        objc_setAssociatedObject(view,&kPDSTMFlexControlOriginalTransformKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+static void PDSTMMoveToWindowY(UIView *view,UIWindow *window,CGFloat newCenterY,const char *key) {
+    if(!view || !view.superview)return;
+    CGRect rect=[view convertRect:view.bounds toView:window];
+    CGFloat deltaY=newCenterY-CGRectGetMidY(rect);
+    if(!isfinite(deltaY)||fabs(deltaY)<3.0||
+        fabs(deltaY)>CGRectGetHeight(window.bounds)*0.8)return;
+    CGAffineTransform base=view.transform;
+    objc_setAssociatedObject(view,key,[NSValue valueWithCGAffineTransform:base],OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    CGPoint a=[view.superview convertPoint:CGPointZero toView:window];
+    CGPoint b=[window convertPoint:CGPointMake(a.x,a.y+deltaY) toView:view.superview];
+    CGPoint c=[window convertPoint:a toView:view.superview];
+    view.transform=CGAffineTransformConcat(base,CGAffineTransformMakeTranslation(b.x-c.x,b.y-c.y));
+}
+static BOOL PDSTMHasVideoAncestor(UIView *view,UIView *render) {
+    for(UIView *ancestor=render;ancestor;ancestor=ancestor.superview) {
+        if(view==ancestor)return YES;
+    }
+    return NO;
+}
+static void PDSTMRelocateControlsInSubtree(UIView *view,UIView *overlayRoot,
+                                          UIWindow *window,CGRect hinge,
+                                          UIView *render,NSUInteger depth) {
+    if(!view || depth>25 || view.hidden || view.alpha<0.02)return;
+    if(PDSTMHasVideoAncestor(view,render) || PDSTMIsVideoOrSubtitle(view))return;
+    CGRect frame=[view convertRect:view.bounds toView:window];
+    CGFloat fullHeight=CGRectGetHeight(window.bounds);
+    CGFloat hingeTop=CGRectGetMinY(hinge);
+    CGFloat hingeBottom=CGRectGetMaxY(hinge);
+    CGFloat bottomHeight=fullHeight-hingeBottom;
+    CGFloat centerY=CGRectGetMidY(frame);
+    CGFloat height=CGRectGetHeight(frame),width=CGRectGetWidth(frame);
+    if(view!=overlayRoot &&
+       height>9 && height<fmin(180.0,fullHeight*0.23) &&
+       width>12 && width<CGRectGetWidth(window.bounds)*1.08 &&
+       CGRectGetMaxY(frame)>-12 &&
+       centerY<hingeBottom+12 &&
+       PDSTMHasControlContent(view,0)) {
+        CGFloat destination=0;
+        CGFloat earlyBoundary=hingeTop*0.27;
+        if(centerY<earlyBoundary) {
+            // Fullscreen header/title/action controls -> bottom half top.
+            CGFloat fraction=fmax(0.0,fmin(1.0,centerY/fmax(1.0,earlyBoundary)));
+            destination=hingeBottom + 27 + fraction*fmin(bottomHeight*0.20,90);
+        } else {
+            // Middle transport buttons -> lower center; leave lower
+            // progress/scrubber and toolbars in their original positions.
+            CGFloat fraction=(centerY-earlyBoundary)/fmax(1.0,hingeBottom-earlyBoundary);
+            fraction=fmax(0.0,fmin(1.0,fraction));
+            destination=hingeBottom + bottomHeight*(0.30+0.17*fraction);
+        }
+        destination=fmin(fullHeight-height*0.5-16,destination);
+        destination=fmax(hingeBottom+height*0.5+10,destination);
+        PDSTMMoveToWindowY(view,window,destination,&kPDSTMFlexControlOriginalTransformKey);
+        if(objc_getAssociatedObject(view,&kPDSTMFlexControlOriginalTransformKey))
+            [pdstmMovedControlViews addObject:view];
+        return; // A moved group carries its children; never double-translate.
+    }
+    for(UIView *child in view.subviews) {
+        PDSTMRelocateControlsInSubtree(child,overlayRoot,window,hinge,render,depth+1);
+    }
+}
+static BOOL PDSTMIsAncestorOfView(UIView *ancestor,UIView *descendant) {
+    for(UIView *v=descendant;v;v=v.superview) if(v==ancestor)return YES;
+    return NO;
+}
+static void PDSTMCollectNativeControlOverlays(UIView *view,NSMutableArray *overlays,NSUInteger depth) {
+    if(!view||depth>28||view.hidden||view.alpha<0.02)return;
+    if(PDSTMIsNativeControlOverlay(view)) {
+        BOOL alreadyInside=NO;
+        for(UIView *existing in overlays) {
+            if(PDSTMIsAncestorOfView(existing,view)) {
+                alreadyInside=YES;
+                break;
+            }
+        }
+        if(!alreadyInside) {
+            // If the new overlay owns a previous match, prefer this root.
+            for(UIView *prior in overlays.copy) {
+                if(PDSTMIsAncestorOfView(view,prior))[overlays removeObject:prior];
+            }
+            [overlays addObject:view];
+            return;
+        }
+    }
+    for(UIView *child in view.subviews) PDSTMCollectNativeControlOverlays(child,overlays,depth+1);
+}
+static void PDSTMRelocateFullscreenControls(UIWindow *window,CGRect hinge,UIView *render) {
+    if(!window || !render)return;
+    NSMutableArray *roots=[NSMutableArray array];
+    PDSTMCollectNativeControlOverlays(window,roots,0);
+    for(UIView *root in roots) {
+        CGRect area=[root convertRect:root.bounds toView:window];
+        // Inline overlays can share these names. Only move controls for
+        // a window-sized player overlay in a folded fullscreen layout.
+        if(CGRectGetWidth(area)<CGRectGetWidth(window.bounds)*0.70)continue;
+        if(CGRectGetHeight(area)<CGRectGetHeight(window.bounds)*0.43)continue;
+        PDSTMRelocateControlsInSubtree(root,root,window,hinge,render,0);
+    }
+}
+
 static void PDSTMRunFlexGlobalPass(void) {
     if(!NSThread.isMainThread)return;
     if(!pdstmMovedVideoViews)pdstmMovedVideoViews=[NSHashTable weakObjectsHashTable];
+    if(!pdstmMovedControlViews)pdstmMovedControlViews=[NSHashTable weakObjectsHashTable];
+    // Every pass starts with YouTube's original geometry. A previous
+    // fullscreen transform can never become the next entry's baseline.
+    // Perform restore, measurement and relocation in one disabled-actions
+    // transaction so the user does not see the intermediate layout.
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    for(UIView *view in pdstmMovedControlViews.allObjects)PDSTMRestoreControl(view);
+    [pdstmMovedControlViews removeAllObjects];
+    for(UIView *view in pdstmMovedVideoViews.allObjects)PDSTMRestoreFlexForView(view);
+    [pdstmMovedVideoViews removeAllObjects];
     UIView *chosen=nil;
     CGRect desiredHinge=CGRectNull;
     UIWindow *chosenWindow=nil;
@@ -614,47 +767,29 @@ static void PDSTMRunFlexGlobalPass(void) {
             }
         }
     }
-    // Restore views from a previous fold/player when the video ends,
-    // fullscreen closes, or the device becomes flat.
-    for(UIView *moved in pdstmMovedVideoViews.allObjects) {
-        if(moved!=chosen)PDSTMRestoreFlexForView(moved);
+    // No hinge or fullscreen video means every modified view is now
+    // restored, including transitions out of fullscreen.
+    if(!chosen||!chosenWindow){
+        [CATransaction commit];
+        return;
     }
-    if(!chosen||!chosenWindow)return;
     NSValue *original=objc_getAssociatedObject(chosen,&kPDSTMFlexOriginalTransformKey);
     if(!original) {
         original=[NSValue valueWithCGAffineTransform:chosen.transform];
         objc_setAssociatedObject(chosen,&kPDSTMFlexOriginalTransformKey,original,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     [pdstmMovedVideoViews addObject:chosen];
-    [UIView performWithoutAnimation:^{
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-        chosen.transform=original.CGAffineTransformValue;
-        CGRect current=[chosen convertRect:chosen.bounds toView:chosenWindow];
-        CGFloat upperPaneHeight=CGRectGetMinY(desiredHinge)-6.0;
-        CGFloat videoCenterY=CGRectGetMidY(current);
-        // If the video is already in the top half, do nothing.
-        if(CGRectGetMaxY(current)<=upperPaneHeight+6) {
-            [CATransaction commit];
-            return;
-        }
-        CGFloat offsetY=upperPaneHeight*0.5-videoCenterY;
-        if(!isfinite(offsetY) || fabs(offsetY)>CGRectGetHeight(chosenWindow.bounds)*0.52){
-            [CATransaction commit];
-            return;
-        }
-        // Apply a window-space translation while preserving the original
-        // YouTube layout transform. Never resize or crop the video here.
-        CGPoint from=[chosen.superview convertPoint:CGPointZero toView:chosenWindow];
-        CGPoint to=CGPointMake(from.x,from.y+offsetY);
-        CGPoint p=[chosenWindow convertPoint:to toView:chosen.superview];
-        CGPoint q=[chosenWindow convertPoint:from toView:chosen.superview];
-        CGFloat localY=p.y-q.y;
-        CGFloat localX=p.x-q.x;
-        chosen.transform=CGAffineTransformConcat(original.CGAffineTransformValue,
-                                                 CGAffineTransformMakeTranslation(localX,localY));
-        [CATransaction commit];
-    }];
+    CGRect current=[chosen convertRect:chosen.bounds toView:chosenWindow];
+    CGFloat upperPaneHeight=CGRectGetMinY(desiredHinge)-6.0;
+    CGFloat videoCenterY=CGRectGetMidY(current);
+    CGFloat offsetY=upperPaneHeight*0.5-videoCenterY;
+    if(CGRectGetMaxY(current)>upperPaneHeight+6 &&
+       isfinite(offsetY) &&
+       fabs(offsetY)<CGRectGetHeight(chosenWindow.bounds)*0.80) {
+        PDSTMMoveToWindowY(chosen,chosenWindow,videoCenterY+offsetY,&kPDSTMFlexOriginalTransformKey);
+    }
+    PDSTMRelocateFullscreenControls(chosenWindow,desiredHinge,chosen);
+    [CATransaction commit];
 }
 static void PDSTMStartFlexWindowTracking(void) {
     if(pdstmFlexGlobalTimer)return;
@@ -666,7 +801,7 @@ static void PDSTMStartFlexWindowTracking(void) {
         object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
             PDSTMRunFlexGlobalPass();
         }];
-    NSLog(@"[PDSTM] Duo Flex tracking uses window hinge regions (v7)");
+    NSLog(@"[PDSTM] Duo Flex v8: per-pass reset, full-window video search and native controls lower pane");
 }
 
 static void PDSTMInstallNativeSettings(void) {
