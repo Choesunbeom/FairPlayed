@@ -150,15 +150,15 @@ static void hookAVPlayerSetVolume(id self,SEL cmd,float value) {
     if(origAVPlayerSetVolume)origAVPlayerSetVolume(self,cmd,value*PDSTMVolume());
 }
 static void hookAVPlayerPlay(id self,SEL cmd) {
-    PDSTMForceMix(@"AVPlayer.play");
+    // Session category/activation hooks already handle mixing; do not
+    // reconfigure AVAudioSession at first video play (reduces startup churn).
     PDSTMTrackPlayer(pdstmAVPlayers,self);
-    PDSTMApplyPlayerVolume(self,YES);
+    if(PDSTMVolume()<0.999f)PDSTMApplyPlayerVolume(self,YES);
     if(origAVPlayerPlay)origAVPlayerPlay(self,cmd);
 }
 static void hookAVPlayerPlayRate(id self,SEL cmd,float rate) {
-    PDSTMForceMix(@"AVPlayer.playImmediatelyAtRate:");
     PDSTMTrackPlayer(pdstmAVPlayers,self);
-    PDSTMApplyPlayerVolume(self,YES);
+    if(PDSTMVolume()<0.999f)PDSTMApplyPlayerVolume(self,YES);
     if(origAVPlayerPlayRate)origAVPlayerPlayRate(self,cmd,rate);
 }
 static void hookAudioPlayerSetVolume(id self,SEL cmd,float value) {
@@ -167,9 +167,8 @@ static void hookAudioPlayerSetVolume(id self,SEL cmd,float value) {
     if(origAudioPlayerSetVolume)origAudioPlayerSetVolume(self,cmd,value*PDSTMVolume());
 }
 static BOOL hookAudioPlayerPlay(id self,SEL cmd) {
-    PDSTMForceMix(@"AVAudioPlayer.play");
     PDSTMTrackPlayer(pdstmAudioPlayers,self);
-    PDSTMApplyPlayerVolume(self,NO);
+    if(PDSTMVolume()<0.999f)PDSTMApplyPlayerVolume(self,NO);
     return origAudioPlayerPlay?origAudioPlayerPlay(self,cmd):NO;
 }
 static NSString *PDSTMStatus(void) {
@@ -463,9 +462,6 @@ static id PDSTMToggleItem(void) {
     }
     return nil;
 }
-static NSString *const kPDSTMFlexKey=@"PDSTMFlexTopVideo";
-static NSHashTable *pdstmFullscreenControllers;
-static void PDSTMUpdateFlexViewport(id controller);
 static void PDSTMUpdateSection(id manager,SEL cmd,NSUInteger category,id entry) {
     if(category!=PDSTMCategory) {
         if(originalUpdateSection)originalUpdateSection(manager,cmd,category,entry);
@@ -649,7 +645,6 @@ static void PDSTMRunFlexGlobalPass(void) {
         }
         // Apply a window-space translation while preserving the original
         // YouTube layout transform. Never resize or crop the video here.
-        CGPoint originalCenter=[chosen.superview convertPoint:CGPointZero toView:chosenWindow];
         CGPoint from=[chosen.superview convertPoint:CGPointZero toView:chosenWindow];
         CGPoint to=CGPointMake(from.x,from.y+offsetY);
         CGPoint p=[chosenWindow convertPoint:to toView:chosen.superview];
@@ -659,7 +654,6 @@ static void PDSTMRunFlexGlobalPass(void) {
         chosen.transform=CGAffineTransformConcat(original.CGAffineTransformValue,
                                                  CGAffineTransformMakeTranslation(localX,localY));
         [CATransaction commit];
-        (void)originalCenter;
     }];
 }
 static void PDSTMStartFlexWindowTracking(void) {
