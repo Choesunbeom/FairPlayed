@@ -101,7 +101,9 @@ static void PDSTMInstallVisibleToggle(UIViewController *vc) {
     UIButton *existing=objc_getAssociatedObject(vc,&kToggleButton);
     if(existing) {
         [existing setTitle:PDSTMButtonTitle() forState:UIControlStateNormal];
-        [vc.view bringSubviewToFront:existing.superview];
+        UIView *top=existing;
+        while(top.superview && top.superview!=vc.view) top=top.superview;
+        if(top.superview==vc.view) [vc.view bringSubviewToFront:top];
         return;
     }
     UIVisualEffectView *glass=[[UIVisualEffectView alloc] initWithEffect:
