@@ -463,6 +463,24 @@ static id PDSTMToggleItem(void) {
     }
     return nil;
 }
+static id PDSTMFlexSettingItem(void) {
+    Class row=objc_getClass("YTSettingsSectionItem");
+    SEL sel=NSSelectorFromString(@"switchItemWithTitle:titleDescription:accessibilityIdentifier:switchOn:switchBlock:");
+    if(!row||![row respondsToSelector:sel])return nil;
+    typedef id(*MakeSwitch)(id,SEL,NSString*,NSString*,NSString*,BOOL,id);
+    id value=[[NSUserDefaults standardUserDefaults] objectForKey:kPDSTMFlexKey];
+    BOOL enabled=value?[value boolValue]:YES;
+    id handler=^BOOL(id cell,BOOL on) {
+        [[NSUserDefaults standardUserDefaults] setBool:on forKey:kPDSTMFlexKey];
+        for(id vc in pdstmFullscreenControllers.allObjects)PDSTMUpdateFlexViewport(vc);
+        return YES;
+    };
+    return ((MakeSwitch)objc_msgSend)(row,sel,
+        @"플렉스 모드 영상 상단 정렬",
+        @"iPhone Duo를 가로로 접었을 때 전체화면 영상을 힌지 위쪽에 배치합니다. 펼치면 원래 위치로 복원합니다. 화면이 어색하면 이 옵션을 끄세요.",
+        @"PDSTMFlexTopVideo",enabled,handler);
+}
+
 static void PDSTMUpdateSection(id manager,SEL cmd,NSUInteger category,id entry) {
     if(category!=PDSTMCategory) {
         if(originalUpdateSection)originalUpdateSection(manager,cmd,category,entry);
@@ -474,7 +492,8 @@ static void PDSTMUpdateSection(id manager,SEL cmd,NSUInteger category,id entry) 
     NSMutableArray *rows=[NSMutableArray array];
     for(id item in @[PDSTMToggleItem()?:[NSNull null],
                      PDSTMStatusItem(manager)?:[NSNull null],
-                     PDSTMVolumeItem(manager)?:[NSNull null]]) {
+                     PDSTMVolumeItem(manager)?:[NSNull null],
+                     PDSTMFlexSettingItem()?:[NSNull null]]) {
         if(item!=[NSNull null])[rows addObject:item];
     }
     Class ic=objc_getClass("YTIIcon");
@@ -523,7 +542,7 @@ static UIView *PDSTMFindVideoView(UIView *root,NSUInteger depth,UIView *fallback
     if(!root || depth>20)return fallback;
     for(UIView *view in root.subviews) {
         NSString *cls=NSStringFromClass(view.class);
-        if(view.hidden || view.alpha<0.02)return fallback;
+        if(view.hidden || view.alpha<0.02)continue;
         if(([cls isEqualToString:@"YTVideoView"]||[cls isEqualToString:@"YTGLMediaPlayerView"])
             && CGRectGetWidth(view.bounds)>100 && CGRectGetHeight(view.bounds)>70) return view;
         if([cls isEqualToString:@"YTPlayerView"] && CGRectGetWidth(view.bounds)>100)
