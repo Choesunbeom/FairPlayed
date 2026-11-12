@@ -167,14 +167,14 @@ static BOOL hookAudioPlayerPlay(id self,SEL cmd) {
 }
 static NSString *PDSTMStatus(void) {
     AVAudioSession *s=[AVAudioSession sharedInstance];
-    return s.isOtherAudioPlaying ? @"다른 앱 오디오 감지됨" : @"다른 앱 오디오 감지 안 됨";
+    return s.isOtherAudioPlaying ? @"다른 앱의 음악 재생 감지됨" : @"다른 앱의 음악 감지 안 됨";
 }
 static NSString *PDSTMSessionDescription(void) {
     AVAudioSession *s=[AVAudioSession sharedInstance];
     BOOL mix=(s.categoryOptions & AVAudioSessionCategoryOptionMixWithOthers)!=0
             || [s.category isEqualToString:AVAudioSessionCategoryAmbient];
     return [NSString stringWithFormat:
-        @"외부 오디오: %@\n앱 식별: iOS에서 제공하지 않음\n\n현재 카테고리: %@\n오디오 혼합 옵션: %@\n앱 내 볼륨 조절 지원: AVPlayer/AVAudioPlayer\n\n음악이 멈춘다면 먼저 YouTube Music을 재생한 다음 YouTube 영상을 재생하고, 이 화면에서 혼합 옵션이 켜져 있는지 확인하세요.",
+        @"다른 앱의 음악 감지: %@\n재생 앱 식별: iOS에서 제공하지 않음\n\n현재 카테고리: %@\n오디오 혼합 옵션: %@\n앱 내 볼륨 조절 지원: AVPlayer/AVAudioPlayer\n\n음악이 멈춘다면 먼저 다른 앱의 음악을 재생한 다음 YouTube 영상을 재생하고, 이 화면에서 혼합 옵션이 켜져 있는지 확인하세요.",
         s.isOtherAudioPlaying?@"재생 감지":@"감지 안 됨",s.category,
         mix?@"켜짐":@"꺼짐"];
 }
@@ -196,14 +196,40 @@ static NSArray *PDSTMAppendCategory(NSArray *source) {
 static NSArray *PDSTMTweaks(id cls,SEL cmd) {
     return PDSTMAppendCategory(originalTweaks?originalTweaks(cls,cmd):nil);
 }
+static NSArray *PDSTMRemoveCategory(NSArray *items) {
+    if(![items isKindOfClass:NSArray.class])return @[];
+    if(![items containsObject:@(PDSTMCategory)])return items;
+    NSMutableArray *result=items.mutableCopy;
+    [result removeObject:@(PDSTMCategory)];
+    return result.copy;
+}
+// YTSettingsGroupData group 0x70737974 is the actual Tweaks group.
+// Group type 1 is an Account group in this YouTube build, so it MUST NOT
+// receive our category. The old "type==1" branch caused the duplicate entry.
+static const NSUInteger PDSTMTweaksGroupType=0x70737974;
+static NSArray *PDSTMOrderedForType(NSArray *items,NSUInteger groupType) {
+    return groupType==PDSTMTweaksGroupType ?
+        PDSTMAppendCategory(items) : PDSTMRemoveCategory(items);
+}
 static NSArray *PDSTMOrderedCategories(id self,SEL cmd) {
     NSArray *items=originalOrderedCategories?originalOrderedCategories(self,cmd):@[];
-    // YouGroupSettings uses group type=1 for Tweaks. Gonerino also adds
-    // the legacy shared Tweaks group (0x70737974).
-    NSInteger type=NSNotFound;
-    @try {type=[[self valueForKey:@"type"] integerValue];} @catch(NSException *e){}
-    if(type==1 || type==0x70737974) return PDSTMAppendCategory(items);
-    return items;
+    NSUInteger groupType=NSNotFound;
+    @try {groupType=[[self valueForKey:@"type"] unsignedIntegerValue];}
+    @catch(NSException *e) {}
+    return PDSTMOrderedForType(items,groupType);
+}
+// Some builds call orderedCategoriesForGroupType: directly, bypassing
+// orderedCategories. Filter here as well so Account can never show PDSTM.
+static NSArray *(*originalOrderedForGroupType)(id,SEL,NSUInteger);
+static NSArray *PDSTMOrderedForGroupType(id self,SEL cmd,NSUInteger groupType) {
+    NSArray *items=originalOrderedForGroupType?
+        originalOrderedForGroupType(self,cmd,groupType):@[];
+    return PDSTMOrderedForType(items,groupType);
+}
+static NSArray *(*originalAccountCategories)(id,SEL);
+static NSArray *PDSTMAccountCategories(id self,SEL cmd) {
+    return PDSTMRemoveCategory(originalAccountCategories?
+        originalAccountCategories(self,cmd):@[]);
 }
 static NSArray *PDSTMCategoryOrder(id cls,SEL cmd) {
     NSArray *items=originalSettingsCategoryOrder?originalSettingsCategoryOrder(cls,cmd):@[];
@@ -266,7 +292,7 @@ static id PDSTMDelegate(id manager) {
     detail.numberOfLines=0;
     detail.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
     detail.textColor=UIColor.secondaryLabelColor;
-    detail.text=@"YouTube Music(다른 앱): 개별 음량 변경 불가\nYouTube(이 앱): 지원되는 AVPlayer/AVAudioPlayer 재생기에 한해 위 비율 적용\n\n※ YouTube가 별도의 오디오 엔진을 사용하면 이 슬라이더가 실제 음량에 반영되지 않을 수 있습니다.";
+    detail.text=@"다른 앱의 음악: 개별 음량 변경 불가\nYouTube 영상(이 앱): 지원되는 AVPlayer/AVAudioPlayer 재생기에 한해 위 비율 적용\n\n※ YouTube가 별도의 오디오 엔진을 사용하면 이 슬라이더가 실제 음량에 반영되지 않을 수 있습니다.";
 
     UIStackView *stack=[[UIStackView alloc] initWithArrangedSubviews:@[title,self.valueLabel,self.volumeSlider,detail]];
     stack.axis=UILayoutConstraintAxisVertical;
@@ -340,13 +366,13 @@ static id PDSTMStatusItem(id manager) {
         dispatch_async(dispatch_get_main_queue(), ^{PDSTMShowStatus(manager);});
         return NO;
     };
-    return PDSTMSimpleRow(@"다른 앱 오디오 상태",
-        @"YouTube Music인지 구분할 수 없으며, iOS가 감지한 모든 외부 앱의 오디오 상태입니다. 눌러서 오디오 세션을 확인하세요.",
+    return PDSTMSimpleRow(@"다른 앱의 음악 상태",
+        @"어느 앱의 음악인지 식별할 수는 없으며, iOS가 감지한 다른 앱의 오디오 상태를 표시합니다. 눌러서 오디오 세션을 확인하세요.",
         @"PDSTMOtherAudioStatus",detail,action);
 }
 static id PDSTMVolumeItem(id manager) {
     id detail=^NSString* {
-        return [NSString stringWithFormat:@"YouTube %d%% · 음악 앱은 별도 제어 불가",(int)lroundf(PDSTMVolume()*100.f)];
+        return [NSString stringWithFormat:@"YouTube %d%% · 다른 앱의 음악 음량은 변경 불가",(int)lroundf(PDSTMVolume()*100.f)];
     };
     id action=^BOOL(id cell,NSUInteger row) {
         dispatch_async(dispatch_get_main_queue(), ^{PDSTMOpenVolume(manager);});
@@ -374,7 +400,7 @@ static UIImage *PDSTMIconWithSelected(id self,SEL cmd,BOOL selected) {
 static id PDSTMToggleItem(void) {
     Class row=objc_getClass("YTSettingsSectionItem");
     SEL sel=NSSelectorFromString(@"switchItemWithTitle:titleDescription:accessibilityIdentifier:switchOn:switchBlock:");
-    NSString *explanation=@"다른 앱의 음악과 YouTube 동영상 소리를 함께 재생합니다. 음악이 멈추는 경우 앱을 재실행한 뒤 사용하세요.";
+    NSString *explanation=@"다른 앱의 음악과 YouTube 영상의 소리를 함께 재생합니다. 음악이 멈추면 앱을 다시 실행한 뒤 시도하세요.";
     if(row && [row respondsToSelector:sel]) {
         typedef id (*MakeSwitch)(id,SEL,NSString*,NSString*,NSString*,BOOL,id);
         id handler=^BOOL(id cell,BOOL enabled) {
@@ -446,6 +472,8 @@ static void PDSTMInstallNativeSettings(void) {
     Class mgr=objc_getClass("YTSettingsSectionItemManager");
     PDSTMHookClass(group,@selector(tweaks),(IMP)PDSTMTweaks,(IMP*)&originalTweaks,YES);
     PDSTMHookClass(group,@selector(orderedCategories),(IMP)PDSTMOrderedCategories,(IMP*)&originalOrderedCategories,NO);
+    PDSTMHookClass(group,@selector(orderedCategoriesForGroupType:),(IMP)PDSTMOrderedForGroupType,(IMP*)&originalOrderedForGroupType,NO);
+    PDSTMHookClass(group,@selector(accountCategories),(IMP)PDSTMAccountCategories,(IMP*)&originalAccountCategories,NO);
     // No global settingsCategoryOrder hook: it was inserting this item into Account.
     PDSTMHookClass(mgr,@selector(updateSectionForCategory:withEntry:),(IMP)PDSTMUpdateSection,(IMP*)&originalUpdateSection,NO);
     Class icons=objc_getClass("YTIIcon");
