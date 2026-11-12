@@ -463,6 +463,9 @@ static id PDSTMToggleItem(void) {
     }
     return nil;
 }
+static NSString *const kPDSTMFlexKey=@"PDSTMFlexTopVideo";
+static NSHashTable *pdstmFullscreenControllers;
+static void PDSTMUpdateFlexViewport(id controller);
 static id PDSTMFlexSettingItem(void) {
     Class row=objc_getClass("YTSettingsSectionItem");
     SEL sel=NSSelectorFromString(@"switchItemWithTitle:titleDescription:accessibilityIdentifier:switchOn:switchBlock:");
@@ -530,9 +533,7 @@ static void PDSTMHookClass(Class cls,SEL sel,IMP replacement,IMP *orig,BOOL isCl
 // when the *active* division region runs horizontally, never in ordinary
 // portrait, flat, or book-folded mode. The original transform is restored
 // automatically when the hinge is no longer active.
-static NSString *const kPDSTMFlexKey=@"PDSTMFlexTopVideo";
 static const char kPDSTMFlexBaseTransformKey;
-static NSHashTable *pdstmFullscreenControllers;
 static NSTimer *pdstmFlexTimer;
 static void (*origFullscreenDidAppear)(id,SEL,BOOL);
 static void (*origFullscreenDidDisappear)(id,SEL,BOOL);
