@@ -9,7 +9,9 @@ permissions:
   contents: write
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
       - name: Build ARM64 dylib for iOS
