@@ -658,7 +658,12 @@ static void PDSTMRelocateControlsInSubtree(UIView *view,UIView *overlayRoot,
                                           UIWindow *window,CGRect hinge,
                                           UIView *render,NSUInteger depth) {
     if(!view || depth>25 || view.hidden || view.alpha<0.02)return;
-    if(PDSTMHasVideoAncestor(view,render) || PDSTMIsVideoOrSubtitle(view))return;
+    // An overlay can own both the video surface and all player buttons.
+    // Do not move its ancestor container, but DO descend into its other
+    // branches or the lower controls will never be discovered.
+    if(view==render)return;
+    BOOL containsRender=PDSTMHasVideoAncestor(view,render);
+    if(PDSTMIsVideoOrSubtitle(view) && !containsRender)return;
     CGRect frame=[view convertRect:view.bounds toView:window];
     CGFloat fullHeight=CGRectGetHeight(window.bounds);
     CGFloat hingeTop=CGRectGetMinY(hinge);
@@ -666,7 +671,7 @@ static void PDSTMRelocateControlsInSubtree(UIView *view,UIView *overlayRoot,
     CGFloat bottomHeight=fullHeight-hingeBottom;
     CGFloat centerY=CGRectGetMidY(frame);
     CGFloat height=CGRectGetHeight(frame),width=CGRectGetWidth(frame);
-    if(view!=overlayRoot &&
+    if(view!=overlayRoot && !containsRender &&
        height>9 && height<fmin(180.0,fullHeight*0.23) &&
        width>12 && width<CGRectGetWidth(window.bounds)*1.08 &&
        CGRectGetMaxY(frame)>-12 &&
