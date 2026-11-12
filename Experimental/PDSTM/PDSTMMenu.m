@@ -224,6 +224,153 @@ static id PDSTMDelegate(id manager) {
     }
     return nil;
 }
+
+@interface PDSTMVolumeController : UIViewController
+@property(nonatomic,strong) UISlider *volumeSlider;
+@property(nonatomic,strong) UILabel *valueLabel;
+@end
+@implementation PDSTMVolumeController
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor=UIColor.systemBackgroundColor;
+    self.title=@"음악·영상 음량 균형";
+    self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"완료" style:UIBarButtonItemStyleDone target:self action:@selector(closeVolume:)];
+    UIVisualEffectView *glass=[[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
+    glass.translatesAutoresizingMaskIntoConstraints=NO;
+    glass.layer.cornerRadius=22;
+    glass.clipsToBounds=YES;
+    [self.view addSubview:glass];
+
+    UILabel *title=[UILabel new];
+    title.translatesAutoresizingMaskIntoConstraints=NO;
+    title.text=@"YouTube 영상 음량";
+    title.font=[UIFont preferredFontForTextStyle:UIFontTextStyleTitle2];
+    title.adjustsFontForContentSizeCategory=YES;
+
+    self.valueLabel=[UILabel new];
+    self.valueLabel.translatesAutoresizingMaskIntoConstraints=NO;
+    self.valueLabel.textAlignment=NSTextAlignmentRight;
+    self.valueLabel.textColor=UIColor.secondaryLabelColor;
+    self.valueLabel.font=[UIFont monospacedDigitSystemFontOfSize:18 weight:UIFontWeightSemibold];
+
+    self.volumeSlider=[UISlider new];
+    self.volumeSlider.translatesAutoresizingMaskIntoConstraints=NO;
+    self.volumeSlider.minimumValue=0.f;
+    self.volumeSlider.maximumValue=1.f;
+    self.volumeSlider.value=PDSTMVolume();
+    self.volumeSlider.accessibilityLabel=@"유튜브 영상 상대 음량";
+    [self.volumeSlider addTarget:self action:@selector(changeVolume:) forControlEvents:UIControlEventValueChanged];
+
+    UILabel *detail=[UILabel new];
+    detail.translatesAutoresizingMaskIntoConstraints=NO;
+    detail.numberOfLines=0;
+    detail.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+    detail.textColor=UIColor.secondaryLabelColor;
+    detail.text=@"YouTube Music(다른 앱): 개별 음량 변경 불가\nYouTube(이 앱): 지원되는 AVPlayer/AVAudioPlayer 재생기에 한해 위 비율 적용\n\n※ YouTube가 별도의 오디오 엔진을 사용하면 이 슬라이더가 실제 음량에 반영되지 않을 수 있습니다.";
+
+    UIStackView *stack=[[UIStackView alloc] initWithArrangedSubviews:@[title,self.valueLabel,self.volumeSlider,detail]];
+    stack.axis=UILayoutConstraintAxisVertical;
+    stack.spacing=14;
+    stack.translatesAutoresizingMaskIntoConstraints=NO;
+    [glass.contentView addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [glass.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:18],
+        [glass.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-18],
+        [glass.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:28],
+        [stack.leadingAnchor constraintEqualToAnchor:glass.contentView.leadingAnchor constant:20],
+        [stack.trailingAnchor constraintEqualToAnchor:glass.contentView.trailingAnchor constant:-20],
+        [stack.topAnchor constraintEqualToAnchor:glass.contentView.topAnchor constant:22],
+        [stack.bottomAnchor constraintEqualToAnchor:glass.contentView.bottomAnchor constant:-24],
+        [self.volumeSlider.heightAnchor constraintGreaterThanOrEqualToConstant:32]
+    ]];
+    [self updateVolumeLabel];
+}
+- (void)updateVolumeLabel {
+    self.valueLabel.text=[NSString stringWithFormat:@"YouTube %d%%",(int)lroundf(self.volumeSlider.value*100.f)];
+}
+- (void)changeVolume:(UISlider *)sender {
+    PDSTMSetSavedVolume(sender.value);
+    PDSTMApplyAllVolumes();
+    [self updateVolumeLabel];
+}
+- (void)closeVolume:(id)sender {
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+@end
+static UIViewController *PDSTMVisibleController(id manager) {
+    id vc=PDSTMDelegate(manager);
+    if(![vc isKindOfClass:UIViewController.class]){
+        for(UIWindow *w in UIApplication.sharedApplication.windows){
+            if(w.isKeyWindow){vc=w.rootViewController;break;}
+        }
+    }
+    if(![vc isKindOfClass:UIViewController.class])return nil;
+    UIViewController *presenter=(UIViewController*)vc;
+    while(presenter.presentedViewController)presenter=presenter.presentedViewController;
+    return presenter;
+}
+static void PDSTMOpenVolume(id manager) {
+    UIViewController *from=PDSTMVisibleController(manager);
+    if(!from)return;
+    PDSTMVolumeController *vc=[PDSTMVolumeController new];
+    UINavigationController *navigation=[[UINavigationController alloc] initWithRootViewController:vc];
+    navigation.modalPresentationStyle=UIModalPresentationPageSheet;
+    [from presentViewController:navigation animated:YES completion:nil];
+}
+static void PDSTMShowStatus(id manager) {
+    UIViewController *from=PDSTMVisibleController(manager);
+    if(!from)return;
+    // Force a refresh before the user inspects the session diagnostic.
+    PDSTMForceMix(@"status view");
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"오디오 상태 점검"
+        message:PDSTMSessionDescription() preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"확인" style:UIAlertActionStyleDefault handler:nil]];
+    [from presentViewController:alert animated:YES completion:nil];
+}
+static id PDSTMSimpleRow(NSString *title,NSString *desc,NSString *key,id detail,id action) {
+    Class cls=objc_getClass("YTSettingsSectionItem");
+    SEL sel=NSSelectorFromString(@"itemWithTitle:titleDescription:accessibilityIdentifier:detailTextBlock:selectBlock:");
+    if(!cls||![cls respondsToSelector:sel])return nil;
+    typedef id(*Create)(id,SEL,id,id,id,id,id);
+    return ((Create)objc_msgSend)(cls,sel,title,desc,key,detail,action);
+}
+static id PDSTMStatusItem(id manager) {
+    id detail=^NSString* {return PDSTMStatus();};
+    id action=^BOOL(id cell,NSUInteger row) {
+        dispatch_async(dispatch_get_main_queue(), ^{PDSTMShowStatus(manager);});
+        return NO;
+    };
+    return PDSTMSimpleRow(@"다른 앱 오디오 상태",
+        @"YouTube Music인지 구분할 수 없으며, iOS가 감지한 모든 외부 앱의 오디오 상태입니다. 눌러서 오디오 세션을 확인하세요.",
+        @"PDSTMOtherAudioStatus",detail,action);
+}
+static id PDSTMVolumeItem(id manager) {
+    id detail=^NSString* {
+        return [NSString stringWithFormat:@"YouTube %d%% · 음악 앱은 별도 제어 불가",(int)lroundf(PDSTMVolume()*100.f)];
+    };
+    id action=^BOOL(id cell,NSUInteger row) {
+        dispatch_async(dispatch_get_main_queue(), ^{PDSTMOpenVolume(manager);});
+        return NO;
+    };
+    return PDSTMSimpleRow(@"영상·음악 음량 균형",
+        @"YouTube 영상의 상대 음량을 조절합니다. 지원되는 AVPlayer/AVAudioPlayer에만 적용됩니다.",
+        @"PDSTMVolume",detail,action);
+}
+// Dedicated waveform icon. We also set Gonerino's shared icon attachment
+// so the icon survives native YouTube UI updates.
+static const void *kPDSTMIconKey=&kPDSTMIconKey;
+static UIImage *(*origPDSTMIconWithColor)(id,SEL,UIColor*);
+static UIImage *(*origPDSTMIconWithSelected)(id,SEL,BOOL);
+static UIImage *PDSTMIconWithColor(id self,SEL cmd,UIColor *color) {
+    UIImage *image=objc_getAssociatedObject(self,kPDSTMIconKey);
+    if(image)return color?[image imageWithTintColor:color renderingMode:UIImageRenderingModeAlwaysOriginal]:image;
+    return origPDSTMIconWithColor?origPDSTMIconWithColor(self,cmd,color):nil;
+}
+static UIImage *PDSTMIconWithSelected(id self,SEL cmd,BOOL selected) {
+    UIImage *image=objc_getAssociatedObject(self,kPDSTMIconKey);
+    if(image)return image;
+    return origPDSTMIconWithSelected?origPDSTMIconWithSelected(self,cmd,selected):nil;
+}
 static id PDSTMToggleItem(void) {
     Class row=objc_getClass("YTSettingsSectionItem");
     SEL sel=NSSelectorFromString(@"switchItemWithTitle:titleDescription:accessibilityIdentifier:switchOn:switchBlock:");
@@ -257,16 +404,23 @@ static void PDSTMUpdateSection(id manager,SEL cmd,NSUInteger category,id entry) 
         return;
     }
     id delegate=PDSTMDelegate(manager);
-    if(!delegate) {NSLog(@"[PDSTM] settings delegate unavailable");return;}
-    id item=PDSTMToggleItem();
+    if(!delegate){ NSLog(@"[PDSTM] settings delegate unavailable"); return; }
     NSMutableArray *rows=[NSMutableArray array];
-    if(item)[rows addObject:item];
+    for(id item in @[PDSTMToggleItem()?:[NSNull null],
+                     PDSTMStatusItem(manager)?:[NSNull null],
+                     PDSTMVolumeItem(manager)?:[NSNull null]]) {
+        if(item!=[NSNull null])[rows addObject:item];
+    }
     Class ic=objc_getClass("YTIIcon");
     id icon=ic?[ic new]:nil;
-    // Use native settings icon when supported. Other tweaks already use
-    // iconType to choose their sidebar icon; a gear icon is a safe fallback.
-    if(icon && [icon respondsToSelector:@selector(setIconType:)]) {
-        ((void(*)(id,SEL,NSInteger))objc_msgSend)(icon,@selector(setIconType:),28);
+    if(icon) {
+        UIImageSymbolConfiguration *config=[UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightMedium];
+        UIImage *waveform=[[UIImage systemImageNamed:@"waveform" withConfiguration:config] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        if(waveform){
+            objc_setAssociatedObject(icon,kPDSTMIconKey,waveform,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(icon,(const void*)sel_registerName("settingsIntegrationIconImage"),waveform,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if([icon respondsToSelector:@selector(setIconType:)]) ((void(*)(id,SEL,NSInteger))objc_msgSend)(icon,@selector(setIconType:),28);
     }
     SEL withIcon=NSSelectorFromString(@"setSectionItems:forCategory:title:icon:titleDescription:headerHidden:");
     SEL withoutIcon=NSSelectorFromString(@"setSectionItems:forCategory:title:titleDescription:headerHidden:");
@@ -275,7 +429,7 @@ static void PDSTMUpdateSection(id manager,SEL cmd,NSUInteger category,id entry) 
     } else if([delegate respondsToSelector:withoutIcon]) {
         ((void(*)(id,SEL,id,NSInteger,id,id,BOOL))objc_msgSend)(delegate,withoutIcon,rows,PDSTMCategory,@"PleaseDontStopTheMusic",nil,NO);
     }
-    NSLog(@"[PDSTM] native Tweaks category added (id=%ld, rows=%lu)",(long)PDSTMCategory,(unsigned long)rows.count);
+    NSLog(@"[PDSTM] Tweaks category %ld with %lu items, status=%@",(long)PDSTMCategory,(unsigned long)rows.count,PDSTMStatus());
 }
 static void PDSTMHookClass(Class cls,SEL sel,IMP replacement,IMP *orig,BOOL isClass) {
     if(!cls)return;
@@ -292,8 +446,11 @@ static void PDSTMInstallNativeSettings(void) {
     Class mgr=objc_getClass("YTSettingsSectionItemManager");
     PDSTMHookClass(group,@selector(tweaks),(IMP)PDSTMTweaks,(IMP*)&originalTweaks,YES);
     PDSTMHookClass(group,@selector(orderedCategories),(IMP)PDSTMOrderedCategories,(IMP*)&originalOrderedCategories,NO);
-    PDSTMHookClass(order,@selector(settingsCategoryOrder),(IMP)PDSTMCategoryOrder,(IMP*)&originalSettingsCategoryOrder,YES);
+    // No global settingsCategoryOrder hook: it was inserting this item into Account.
     PDSTMHookClass(mgr,@selector(updateSectionForCategory:withEntry:),(IMP)PDSTMUpdateSection,(IMP*)&originalUpdateSection,NO);
+    Class icons=objc_getClass("YTIIcon");
+    PDSTMHookClass(icons,@selector(iconImageWithColor:),(IMP)PDSTMIconWithColor,(IMP*)&origPDSTMIconWithColor,NO);
+    PDSTMHookClass(icons,@selector(iconImageWithSelected:),(IMP)PDSTMIconWithSelected,(IMP*)&origPDSTMIconWithSelected,NO);
     NSLog(@"[PDSTM] native Tweaks registration group=%@ manager=%@",group,mgr);
 }
 
@@ -309,6 +466,19 @@ __attribute__((constructor)) static void PDSTMInit(void) {
             MSHookMessageEx(av,@selector(setActive:error:),(IMP)hookActive1,(IMP *)&origSetActive1);
             MSHookMessageEx(av,@selector(setActive:withOptions:error:),(IMP)hookActive2,(IMP *)&origSetActive2);
         }
+        pdstmAVPlayers=[NSHashTable weakObjectsHashTable];
+        pdstmAudioPlayers=[NSHashTable weakObjectsHashTable];
+        Class avPlayer=objc_getClass("AVPlayer");
+        Class audioPlayer=objc_getClass("AVAudioPlayer");
+        PDSTMHookClass(avPlayer,@selector(setVolume:),(IMP)hookAVPlayerSetVolume,(IMP*)&origAVPlayerSetVolume,NO);
+        PDSTMHookClass(avPlayer,@selector(play),(IMP)hookAVPlayerPlay,(IMP*)&origAVPlayerPlay,NO);
+        PDSTMHookClass(avPlayer,@selector(playImmediatelyAtRate:),(IMP)hookAVPlayerPlayRate,(IMP*)&origAVPlayerPlayRate,NO);
+        PDSTMHookClass(audioPlayer,@selector(setVolume:),(IMP)hookAudioPlayerSetVolume,(IMP*)&origAudioPlayerSetVolume,NO);
+        PDSTMHookClass(audioPlayer,@selector(play),(IMP)hookAudioPlayerPlay,(IMP*)&origAudioPlayerPlay,NO);
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note){
+            PDSTMForceMix(@"app became active");
+        }];
+        dispatch_async(dispatch_get_main_queue(), ^{PDSTMForceMix(@"early app startup");});
         PDSTMInstallNativeSettings();
     }
 }
