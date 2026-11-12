@@ -127,8 +127,15 @@ static void PDSTMTrackPlayer(NSHashTable *table,id player) {
 }
 static void PDSTMApplyPlayerVolume(id player,BOOL isAV) {
     float scaled=PDSTMDesiredVolume(player)*PDSTMVolume();
-    if(isAV&&origAVPlayerSetVolume)origAVPlayerSetVolume(player,@selector(setVolume:),scaled);
-    else if(!isAV&&origAudioPlayerSetVolume)origAudioPlayerSetVolume(player,@selector(setVolume:),scaled);
+    // Avoid redundant volume writes during player startup; a needless
+    // setVolume: may cause extra video/audio renderer reconfiguration.
+    if(isAV&&origAVPlayerSetVolume) {
+        float current=((AVPlayer *)player).volume;
+        if(fabsf(current-scaled)>0.005f) origAVPlayerSetVolume(player,@selector(setVolume:),scaled);
+    } else if(!isAV&&origAudioPlayerSetVolume) {
+        float current=((AVAudioPlayer *)player).volume;
+        if(fabsf(current-scaled)>0.005f) origAudioPlayerSetVolume(player,@selector(setVolume:),scaled);
+    }
 }
 static void PDSTMApplyAllVolumes(void) {
     NSArray *players=nil;
@@ -167,7 +174,7 @@ static BOOL hookAudioPlayerPlay(id self,SEL cmd) {
 }
 static NSString *PDSTMStatus(void) {
     AVAudioSession *s=[AVAudioSession sharedInstance];
-    return s.isOtherAudioPlaying ? @"다른 앱의 음악 재생 감지됨" : @"다른 앱의 음악 감지 안 됨";
+    return s.isOtherAudioPlaying ? @"🟢 다른 앱의 음악 재생 중" : @"🔴 다른 앱의 음악 재생 감지 안 됨";
 }
 static NSString *PDSTMSessionDescription(void) {
     AVAudioSession *s=[AVAudioSession sharedInstance];
@@ -360,6 +367,38 @@ static id PDSTMSimpleRow(NSString *title,NSString *desc,NSString *key,id detail,
     typedef id(*Create)(id,SEL,id,id,id,id,id);
     return ((Create)objc_msgSend)(cls,sel,title,desc,key,detail,action);
 }
+
+// Update the colored state inline without requiring the user to tap a row.
+// Only update labels when the other-audio state actually changes.
+static NSTimer *pdstmMusicStatusTimer;
+static NSString *pdstmLastVisibleState;
+static void PDSTMUpdateVisibleStatus(UIView *root,NSString *state,NSUInteger depth) {
+    if(!root || depth>20)return;
+    if([root isKindOfClass:UILabel.class]) {
+        UILabel *label=(UILabel *)root;
+        NSString *current=label.text?:@"";
+        if(([current hasPrefix:@"🟢 "]||[current hasPrefix:@"🔴 "])
+            && [current containsString:@"다른 앱의 음악"]
+            && ![current isEqualToString:state]) {
+            label.text=state;
+            [label setNeedsLayout];
+        }
+    }
+    for(UIView *v in root.subviews)PDSTMUpdateVisibleStatus(v,state,depth+1);
+}
+static void PDSTMStartMusicStatusMonitor(void) {
+    if(pdstmMusicStatusTimer)return;
+    pdstmLastVisibleState=PDSTMStatus();
+    pdstmMusicStatusTimer=[NSTimer scheduledTimerWithTimeInterval:1.25 repeats:YES block:^(NSTimer *timer) {
+        NSString *now=PDSTMStatus();
+        if([now isEqualToString:pdstmLastVisibleState])return;
+        pdstmLastVisibleState=now;
+        for(UIWindow *win in UIApplication.sharedApplication.windows) {
+            if(!win.isHidden)PDSTMUpdateVisibleStatus(win,now,0);
+        }
+    }];
+}
+
 static id PDSTMStatusItem(id manager) {
     id detail=^NSString* {return PDSTMStatus();};
     id action=^BOOL(id cell,NSUInteger row) {
@@ -431,6 +470,7 @@ static void PDSTMUpdateSection(id manager,SEL cmd,NSUInteger category,id entry) 
     }
     id delegate=PDSTMDelegate(manager);
     if(!delegate){ NSLog(@"[PDSTM] settings delegate unavailable"); return; }
+    dispatch_async(dispatch_get_main_queue(), ^{PDSTMStartMusicStatusMonitor();});
     NSMutableArray *rows=[NSMutableArray array];
     for(id item in @[PDSTMToggleItem()?:[NSNull null],
                      PDSTMStatusItem(manager)?:[NSNull null],
