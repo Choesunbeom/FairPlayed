@@ -466,24 +466,6 @@ static id PDSTMToggleItem(void) {
 static NSString *const kPDSTMFlexKey=@"PDSTMFlexTopVideo";
 static NSHashTable *pdstmFullscreenControllers;
 static void PDSTMUpdateFlexViewport(id controller);
-static id PDSTMFlexSettingItem(void) {
-    Class row=objc_getClass("YTSettingsSectionItem");
-    SEL sel=NSSelectorFromString(@"switchItemWithTitle:titleDescription:accessibilityIdentifier:switchOn:switchBlock:");
-    if(!row||![row respondsToSelector:sel])return nil;
-    typedef id(*MakeSwitch)(id,SEL,NSString*,NSString*,NSString*,BOOL,id);
-    id value=[[NSUserDefaults standardUserDefaults] objectForKey:kPDSTMFlexKey];
-    BOOL enabled=value?[value boolValue]:YES;
-    id handler=^BOOL(id cell,BOOL on) {
-        [[NSUserDefaults standardUserDefaults] setBool:on forKey:kPDSTMFlexKey];
-        for(id vc in pdstmFullscreenControllers.allObjects)PDSTMUpdateFlexViewport(vc);
-        return YES;
-    };
-    return ((MakeSwitch)objc_msgSend)(row,sel,
-        @"플렉스 모드 영상 상단 정렬",
-        @"iPhone Duo를 가로로 접었을 때 전체화면 영상을 힌지 위쪽에 배치합니다. 펼치면 원래 위치로 복원합니다. 화면이 어색하면 이 옵션을 끄세요.",
-        @"PDSTMFlexTopVideo",enabled,handler);
-}
-
 static void PDSTMUpdateSection(id manager,SEL cmd,NSUInteger category,id entry) {
     if(category!=PDSTMCategory) {
         if(originalUpdateSection)originalUpdateSection(manager,cmd,category,entry);
@@ -495,8 +477,7 @@ static void PDSTMUpdateSection(id manager,SEL cmd,NSUInteger category,id entry) 
     NSMutableArray *rows=[NSMutableArray array];
     for(id item in @[PDSTMToggleItem()?:[NSNull null],
                      PDSTMStatusItem(manager)?:[NSNull null],
-                     PDSTMVolumeItem(manager)?:[NSNull null],
-                     PDSTMFlexSettingItem()?:[NSNull null]]) {
+                     PDSTMVolumeItem(manager)?:[NSNull null]]) {
         if(item!=[NSNull null])[rows addObject:item];
     }
     Class ic=objc_getClass("YTIIcon");
@@ -529,120 +510,169 @@ static void PDSTMHookClass(Class cls,SEL sel,IMP replacement,IMP *orig,BOOL isCl
     }
 }
 
-// iPhone Duo Flex Mode support (iOS 27.1). We only move the video viewport
-// when the *active* division region runs horizontally, never in ordinary
-// portrait, flat, or book-folded mode. The original transform is restored
-// automatically when the hinge is no longer active.
-static const char kPDSTMFlexBaseTransformKey;
-static NSTimer *pdstmFlexTimer;
-static void (*origFullscreenDidAppear)(id,SEL,BOOL);
-static void (*origFullscreenDidDisappear)(id,SEL,BOOL);
-static void (*origFullscreenDidLayout)(id,SEL);
-
-static UIView *PDSTMFindVideoView(UIView *root,NSUInteger depth,UIView *fallback) {
-    if(!root || depth>20)return fallback;
-    for(UIView *view in root.subviews) {
-        NSString *cls=NSStringFromClass(view.class);
-        if(view.hidden || view.alpha<0.02)continue;
-        if(([cls isEqualToString:@"YTVideoView"]||[cls isEqualToString:@"YTGLMediaPlayerView"])
-            && CGRectGetWidth(view.bounds)>100 && CGRectGetHeight(view.bounds)>70) return view;
-        if([cls isEqualToString:@"YTPlayerView"] && CGRectGetWidth(view.bounds)>100)
-            fallback=view;
-        UIView *found=PDSTMFindVideoView(view,depth+1,fallback);
-        if(found && ![NSStringFromClass(found.class) isEqualToString:@"YTPlayerView"])return found;
-        if(found)fallback=found;
-    }
-    return fallback;
-}
-static void PDSTMRestoreFlex(UIView *root) {
-    UIView *target=PDSTMFindVideoView(root,0,nil);
-    if(!target)return;
-    NSValue *stored=objc_getAssociatedObject(target,&kPDSTMFlexBaseTransformKey);
-    if(stored) {
-        target.transform=stored.CGAffineTransformValue;
-        objc_setAssociatedObject(target,&kPDSTMFlexBaseTransformKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-}
-static CGRect PDSTMActiveHorizontalHinge(UIView *root) {
-    if(!root.window || ![root respondsToSelector:@selector(reservedRegionsOfKind:options:)])return CGRectNull;
+// iPhone Duo fullscreen placement, independent of music-settings UI.
+//
+// v6 only watched YTWatchFullscreenViewController's own view; the real video
+// often lives in a different controller / render surface in YouTube 21.44.4.
+// v7 tracks visible scenes' windows, discovers the live rendering surface and
+// queries the official UIKit hinge division in the WINDOW coordinate system.
+// No user-facing Flex option is registered under PleaseDontStopTheMusic.
+static const char kPDSTMFlexOriginalTransformKey;
+static NSHashTable *pdstmMovedVideoViews;
+static NSTimer *pdstmFlexGlobalTimer;
+static CGRect PDSTMActiveHorizontalHingeInWindow(UIWindow *window) {
+    if(!window || window.hidden || ![window respondsToSelector:@selector(reservedRegionsOfKind:options:)])return CGRectNull;
     Class kindClass=objc_getClass("UIViewReservedRegionKind");
-    SEL kindSel=NSSelectorFromString(@"divisionRegionKind");
-    if(!kindClass || ![kindClass respondsToSelector:kindSel])return CGRectNull;
-    id kind=((id(*)(id,SEL))objc_msgSend)(kindClass,kindSel);
+    SEL divisionKind=NSSelectorFromString(@"divisionRegionKind");
+    if(!kindClass || ![kindClass respondsToSelector:divisionKind])return CGRectNull;
+    id kind=((id(*)(id,SEL))objc_msgSend)(kindClass,divisionKind);
+    if(!kind)return CGRectNull;
     SEL query=NSSelectorFromString(@"reservedRegionsOfKind:options:");
-    NSArray *regions=((id(*)(id,SEL,id,NSUInteger))objc_msgSend)(root,query,kind,0);
+    NSArray *regions=((NSArray *(*)(id,SEL,id,NSUInteger))objc_msgSend)(window,query,kind,0);
+    CGRect bounds=window.bounds;
     for(id region in regions) {
-        SEL activeSel=[region respondsToSelector:@selector(isActive)]?@selector(isActive):@selector(active);
-        if(![region respondsToSelector:activeSel] ||
-           !((BOOL(*)(id,SEL))objc_msgSend)(region,activeSel))continue;
-        if(![region respondsToSelector:@selector(frame)])continue;
-        CGRect r=((CGRect(*)(id,SEL))objc_msgSend)(region,@selector(frame));
-        if(CGRectGetWidth(r)>CGRectGetHeight(r)*2.0 &&
-           CGRectGetWidth(r)>=CGRectGetWidth(root.bounds)*0.6 &&
-           CGRectGetMinY(r)>90 &&
-           CGRectGetMinY(r)<CGRectGetHeight(root.bounds)*0.85) return r;
+        BOOL active=[region respondsToSelector:@selector(isActive)]?
+            ((BOOL(*)(id,SEL))objc_msgSend)(region,@selector(isActive)):
+            ([region respondsToSelector:@selector(active)]?
+                ((BOOL(*)(id,SEL))objc_msgSend)(region,@selector(active)):YES);
+        if(!active || ![region respondsToSelector:@selector(frame)])continue;
+        CGRect frame=((CGRect(*)(id,SEL))objc_msgSend)(region,@selector(frame));
+        if(CGRectGetWidth(frame)>CGRectGetHeight(frame)*2.0
+           && CGRectGetWidth(frame)>CGRectGetWidth(bounds)*0.6
+           && CGRectGetMinY(frame)>CGRectGetHeight(bounds)*0.15
+           && CGRectGetMinY(frame)<CGRectGetHeight(bounds)*0.85) {
+            return frame;
+        }
     }
     return CGRectNull;
 }
-static void PDSTMUpdateFlexViewport(id controller) {
-    if(![controller isKindOfClass:UIViewController.class])return;
-    UIViewController *vc=(UIViewController*)controller;
-    if(!vc.isViewLoaded || !vc.view.window)return;
-    UIView *root=vc.view;
-    BOOL enabled=[[NSUserDefaults standardUserDefaults] objectForKey:kPDSTMFlexKey]?
-        [[NSUserDefaults standardUserDefaults] boolForKey:kPDSTMFlexKey]:YES;
-    CGRect hinge=enabled?PDSTMActiveHorizontalHinge(root):CGRectNull;
-    if(CGRectIsNull(hinge)) {
-        PDSTMRestoreFlex(root);
-        return;
-    }
-    UIView *target=PDSTMFindVideoView(root,0,nil);
-    if(!target || !target.superview)return;
-    // Restore the source layout before measuring. Never accumulate offsets.
-    NSValue *original=objc_getAssociatedObject(target,&kPDSTMFlexBaseTransformKey);
-    if(!original) {
-        original=[NSValue valueWithCGAffineTransform:target.transform];
-        objc_setAssociatedObject(target,&kPDSTMFlexBaseTransformKey,original,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    target.transform=original.CGAffineTransformValue;
-    CGRect video=[target convertRect:target.bounds toView:root];
-    CGFloat topHeight=CGRectGetMinY(hinge)-6.0;
-    if(topHeight<100||CGRectGetHeight(video)<40 || CGRectGetWidth(video)<100)return;
-    CGFloat scale=fmin(1.0,fmin((CGRectGetWidth(root.bounds)-12)/CGRectGetWidth(video),
-                    (topHeight-12)/CGRectGetHeight(video)));
-    if(!isfinite(scale)||scale<0.35)return;
-    target.transform=CGAffineTransformScale(original.CGAffineTransformValue,scale,scale);
-    video=[target convertRect:target.bounds toView:root];
-    CGFloat moveX=CGRectGetMidX(root.bounds)-CGRectGetMidX(video);
-    CGFloat moveY=(topHeight/2.0)-CGRectGetMidY(video);
-    target.transform=CGAffineTransformConcat(target.transform,CGAffineTransformMakeTranslation(moveX,moveY));
+static NSInteger PDSTMVideoCandidateScore(UIView *view) {
+    NSString *name=NSStringFromClass(view.class);
+    NSString *layerName=NSStringFromClass(view.layer.class);
+    if([name containsString:@"YTGLMediaPlayerView"])return 12;
+    if([name containsString:@"YTVideoView"])return 11;
+    if([name containsString:@"YTPlayerRenderingView"])return 10;
+    if([name containsString:@"AVPlayerView"])return 9;
+    if([layerName containsString:@"AVPlayerLayer"])return 12;
+    if([layerName containsString:@"AVSampleBufferDisplayLayer"])return 12;
+    if([name containsString:@"GLMedia"] || [name containsString:@"VideoRenderer"])return 9;
+    if([name containsString:@"YTPlayerView"])return 5;
+    return 0;
 }
-static void PDSTMFullscreenLayout(id self,SEL cmd) {
-    if(origFullscreenDidLayout)origFullscreenDidLayout(self,cmd);
-    PDSTMUpdateFlexViewport(self);
+static void PDSTMFindFullscreenVideo(UIView *root,UIWindow *window,CGRect hinge,
+                                  NSUInteger depth,UIView **bestView,CGFloat *bestScore) {
+    if(!root || depth>28 || root.hidden || root.alpha<0.03)return;
+    NSInteger priority=PDSTMVideoCandidateScore(root);
+    if(priority && root.superview) {
+        NSValue *oldTransform=objc_getAssociatedObject(root,&kPDSTMFlexOriginalTransformKey);
+        if(oldTransform)root.transform=oldTransform.CGAffineTransformValue;
+        CGRect rect=[root convertRect:root.bounds toView:window];
+        CGFloat width=CGRectGetWidth(rect),height=CGRectGetHeight(rect);
+        if(isfinite(width)&&isfinite(height)
+           && width>CGRectGetWidth(window.bounds)*0.66
+           && height>CGRectGetHeight(window.bounds)*0.16
+           && CGRectGetMinY(rect)<CGRectGetMinY(hinge)+48
+           && CGRectGetMaxY(rect)>CGRectGetMinY(hinge)-48
+           && CGRectIntersectsRect(rect,window.bounds)) {
+            // Prefer the actual render surface over its full-screen wrapper.
+            CGFloat score=(CGFloat)priority*1000.0
+                 + fmin(400.0,width/CGRectGetWidth(window.bounds)*140.0)
+                 - fabs(CGRectGetMidY(rect)-CGRectGetMidY(window.bounds))*0.07;
+            if(score>*bestScore){*bestScore=score;*bestView=root;}
+        }
+    }
+    for(UIView *child in root.subviews) {
+        PDSTMFindFullscreenVideo(child,window,hinge,depth+1,bestView,bestScore);
+    }
 }
-static void PDSTMFullscreenAppear(id self,SEL cmd,BOOL animated) {
-    if(origFullscreenDidAppear)origFullscreenDidAppear(self,cmd,animated);
-    if(!pdstmFullscreenControllers)pdstmFullscreenControllers=[NSHashTable weakObjectsHashTable];
-    [pdstmFullscreenControllers addObject:self];
-    PDSTMUpdateFlexViewport(self);
-    if(!pdstmFlexTimer) {
-        pdstmFlexTimer=[NSTimer scheduledTimerWithTimeInterval:0.65 repeats:YES block:^(NSTimer *t) {
-            NSArray *controllers=pdstmFullscreenControllers.allObjects;
-            if(!controllers.count) {
-                [pdstmFlexTimer invalidate];
-                pdstmFlexTimer=nil;
-                return;
+static void PDSTMRestoreFlexForView(UIView *view) {
+    if(!view)return;
+    NSValue *base=objc_getAssociatedObject(view,&kPDSTMFlexOriginalTransformKey);
+    if(!base)return;
+    [UIView performWithoutAnimation:^{
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        view.transform=base.CGAffineTransformValue;
+        [CATransaction commit];
+    }];
+    objc_setAssociatedObject(view,&kPDSTMFlexOriginalTransformKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+static void PDSTMRunFlexGlobalPass(void) {
+    if(!NSThread.isMainThread)return;
+    if(!pdstmMovedVideoViews)pdstmMovedVideoViews=[NSHashTable weakObjectsHashTable];
+    UIView *chosen=nil;
+    CGRect desiredHinge=CGRectNull;
+    UIWindow *chosenWindow=nil;
+    CGFloat bestScore=-CGFLOAT_MAX;
+    for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if(![scene isKindOfClass:UIWindowScene.class]||scene.activationState!=UISceneActivationStateForegroundActive)continue;
+        for(UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if(window.hidden || window.alpha<0.03 || window.windowLevel!=UIWindowLevelNormal)continue;
+            CGRect hinge=PDSTMActiveHorizontalHingeInWindow(window);
+            if(CGRectIsNull(hinge))continue;
+            UIView *candidate=nil;
+            CGFloat localScore=-CGFLOAT_MAX;
+            PDSTMFindFullscreenVideo(window,window,hinge,0,&candidate,&localScore);
+            if(candidate && localScore>bestScore){
+                chosen=candidate;desiredHinge=hinge;chosenWindow=window;bestScore=localScore;
             }
-            for(id vc in controllers)PDSTMUpdateFlexViewport(vc);
-        }];
+        }
     }
+    // Restore views from a previous fold/player when the video ends,
+    // fullscreen closes, or the device becomes flat.
+    for(UIView *moved in pdstmMovedVideoViews.allObjects) {
+        if(moved!=chosen)PDSTMRestoreFlexForView(moved);
+    }
+    if(!chosen||!chosenWindow)return;
+    NSValue *original=objc_getAssociatedObject(chosen,&kPDSTMFlexOriginalTransformKey);
+    if(!original) {
+        original=[NSValue valueWithCGAffineTransform:chosen.transform];
+        objc_setAssociatedObject(chosen,&kPDSTMFlexOriginalTransformKey,original,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [pdstmMovedVideoViews addObject:chosen];
+    [UIView performWithoutAnimation:^{
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        chosen.transform=original.CGAffineTransformValue;
+        CGRect current=[chosen convertRect:chosen.bounds toView:chosenWindow];
+        CGFloat upperPaneHeight=CGRectGetMinY(desiredHinge)-6.0;
+        CGFloat videoCenterY=CGRectGetMidY(current);
+        // If the video is already in the top half, do nothing.
+        if(CGRectGetMaxY(current)<=upperPaneHeight+6) {
+            [CATransaction commit];
+            return;
+        }
+        CGFloat offsetY=upperPaneHeight*0.5-videoCenterY;
+        if(!isfinite(offsetY) || fabs(offsetY)>CGRectGetHeight(chosenWindow.bounds)*0.52){
+            [CATransaction commit];
+            return;
+        }
+        // Apply a window-space translation while preserving the original
+        // YouTube layout transform. Never resize or crop the video here.
+        CGPoint originalCenter=[chosen.superview convertPoint:CGPointZero toView:chosenWindow];
+        CGPoint from=[chosen.superview convertPoint:CGPointZero toView:chosenWindow];
+        CGPoint to=CGPointMake(from.x,from.y+offsetY);
+        CGPoint p=[chosenWindow convertPoint:to toView:chosen.superview];
+        CGPoint q=[chosenWindow convertPoint:from toView:chosen.superview];
+        CGFloat localY=p.y-q.y;
+        CGFloat localX=p.x-q.x;
+        chosen.transform=CGAffineTransformConcat(original.CGAffineTransformValue,
+                                                 CGAffineTransformMakeTranslation(localX,localY));
+        [CATransaction commit];
+        (void)originalCenter;
+    }];
 }
-static void PDSTMFullscreenDisappear(id self,SEL cmd,BOOL animated) {
-    if([self isKindOfClass:UIViewController.class] && ((UIViewController*)self).isViewLoaded)
-        PDSTMRestoreFlex(((UIViewController*)self).view);
-    [pdstmFullscreenControllers removeObject:self];
-    if(origFullscreenDidDisappear)origFullscreenDidDisappear(self,cmd,animated);
+static void PDSTMStartFlexWindowTracking(void) {
+    if(pdstmFlexGlobalTimer)return;
+    pdstmMovedVideoViews=[NSHashTable weakObjectsHashTable];
+    pdstmFlexGlobalTimer=[NSTimer scheduledTimerWithTimeInterval:0.55 repeats:YES block:^(NSTimer *t) {
+        PDSTMRunFlexGlobalPass();
+    }];
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
+        object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+            PDSTMRunFlexGlobalPass();
+        }];
+    NSLog(@"[PDSTM] Duo Flex tracking uses window hinge regions (v7)");
 }
 
 static void PDSTMInstallNativeSettings(void) {
@@ -658,11 +688,7 @@ static void PDSTMInstallNativeSettings(void) {
     Class icons=objc_getClass("YTIIcon");
     PDSTMHookClass(icons,@selector(iconImageWithColor:),(IMP)PDSTMIconWithColor,(IMP*)&origPDSTMIconWithColor,NO);
     PDSTMHookClass(icons,@selector(iconImageWithSelected:),(IMP)PDSTMIconWithSelected,(IMP*)&origPDSTMIconWithSelected,NO);
-    Class fullscreen=objc_getClass("YTWatchFullscreenViewController");
-    PDSTMHookClass(fullscreen,@selector(viewDidAppear:),(IMP)PDSTMFullscreenAppear,(IMP*)&origFullscreenDidAppear,NO);
-    PDSTMHookClass(fullscreen,@selector(viewDidDisappear:),(IMP)PDSTMFullscreenDisappear,(IMP*)&origFullscreenDidDisappear,NO);
-    PDSTMHookClass(fullscreen,@selector(viewDidLayoutSubviews),(IMP)PDSTMFullscreenLayout,(IMP*)&origFullscreenDidLayout,NO);
-    NSLog(@"[PDSTM] Duo flex fullscreen viewport hooked: %@",fullscreen);
+    dispatch_async(dispatch_get_main_queue(), ^{PDSTMStartFlexWindowTracking();});
     NSLog(@"[PDSTM] native Tweaks registration group=%@ manager=%@",group,mgr);
 }
 
