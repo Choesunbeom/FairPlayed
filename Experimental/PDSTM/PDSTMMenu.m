@@ -15,62 +15,169 @@ static BOOL PDSTMShouldMix(AVAudioSession *s) {
     return PDSTMEnabled(); // Do not rely on isOtherAudioPlaying changing during activation.
 }
 
-static BOOL (*origSetCategory1)(id, SEL, NSString *, NSError **);
-static BOOL (*origSetCategory2)(id, SEL, NSString *, NSString *, AVAudioSessionCategoryOptions, NSError **);
-static BOOL (*origSetCategory3)(id, SEL, NSString *, NSString *, AVAudioSessionRouteSharingPolicy, AVAudioSessionCategoryOptions, NSError **);
-static BOOL (*origSetCategory4)(id, SEL, NSString *, AVAudioSessionCategoryOptions, NSError **);
-static BOOL (*origSetActive1)(id, SEL, BOOL, NSError **);
-static BOOL (*origSetActive2)(id, SEL, BOOL, AVAudioSessionSetActiveOptions, NSError **);
-static void (*origSettingsPageAppeared)(id, SEL, BOOL);
-static void (*origSettingsSplitAppeared)(id, SEL, BOOL);
 
-static BOOL hookCategory1(id self,SEL cmd,NSString *cat,NSError **err) {
-    if (PDSTMShouldMix(self)) {
-        if ([cat isEqualToString:AVAudioSessionCategorySoloAmbient]) cat=AVAudioSessionCategoryAmbient;
-        if ([cat isEqualToString:AVAudioSessionCategoryPlayback]) {
-            return [(AVAudioSession *)self setCategory:cat mode:AVAudioSessionModeDefault options:AVAudioSessionCategoryOptionMixWithOthers error:err];
-        }
+// Play mixing support. Do not call the high-level setter recursively from its
+// own hook; apply using original implementations so reentrant hooks are safe.
+static BOOL (*origSetCategory1)(id,SEL,NSString*,NSError**);
+static BOOL (*origSetCategory2)(id,SEL,NSString*,NSString*,AVAudioSessionCategoryOptions,NSError**);
+static BOOL (*origSetCategory3)(id,SEL,NSString*,NSString*,AVAudioSessionRouteSharingPolicy,AVAudioSessionCategoryOptions,NSError**);
+static BOOL (*origSetCategory4)(id,SEL,NSString*,AVAudioSessionCategoryOptions,NSError**);
+static BOOL (*origSetActive1)(id,SEL,BOOL,NSError**);
+static BOOL (*origSetActive2)(id,SEL,BOOL,AVAudioSessionSetActiveOptions,NSError**);
+static __thread BOOL pdstmConfiguring;
+static NSString *const PDSTMVolumeKey=@"PDSTMYouTubeVolume";
+static const void *kVolumeOriginalKey=&kVolumeOriginalKey;
+static NSHashTable *pdstmAVPlayers;
+static NSHashTable *pdstmAudioPlayers;
+static void PDSTMForceMix(NSString *reason);
+
+static BOOL PDSTMIsMixableCategory(NSString *c) {
+    return [c isEqualToString:AVAudioSessionCategoryPlayback] ||
+           [c isEqualToString:AVAudioSessionCategoryPlayAndRecord] ||
+           [c isEqualToString:AVAudioSessionCategoryMultiRoute];
+}
+static NSString *PDSTMNormalizedCategory(NSString *category) {
+    return PDSTMEnabled() && [category isEqualToString:AVAudioSessionCategorySoloAmbient]
+          ? AVAudioSessionCategoryAmbient : category;
+}
+static AVAudioSessionCategoryOptions PDSTMNormalizedOptions(NSString *cat,AVAudioSessionCategoryOptions options) {
+    if(!PDSTMEnabled())return options;
+    // Ducking/spoken-audio interruption can still silence the music source.
+    options&=~(AVAudioSessionCategoryOptionDuckOthers|AVAudioSessionCategoryOptionInterruptSpokenAudioAndMixWithOthers);
+    if(PDSTMIsMixableCategory(cat))options|=AVAudioSessionCategoryOptionMixWithOthers;
+    return options;
+}
+static BOOL hookCategory1(id self,SEL cmd,NSString *category,NSError **error) {
+    if(!origSetCategory1)return NO;
+    if(pdstmConfiguring||!PDSTMEnabled())return origSetCategory1(self,cmd,category,error);
+    category=PDSTMNormalizedCategory(category);
+    if([category isEqualToString:AVAudioSessionCategoryAmbient])return origSetCategory1(self,cmd,category,error);
+    if(PDSTMIsMixableCategory(category)&&origSetCategory2){
+        return origSetCategory2(self,@selector(setCategory:mode:options:error:),
+                 category,((AVAudioSession*)self).mode,
+                 PDSTMNormalizedOptions(category,((AVAudioSession*)self).categoryOptions),error);
     }
-    return origSetCategory1(self,cmd,cat,err);
+    return origSetCategory1(self,cmd,category,error);
 }
-static BOOL hookCategory2(id self,SEL cmd,NSString *cat,NSString *mode,AVAudioSessionCategoryOptions opts,NSError **err) {
-    if(PDSTMShouldMix(self)) {
-        if([cat isEqualToString:AVAudioSessionCategorySoloAmbient])cat=AVAudioSessionCategoryAmbient;
-        opts|=AVAudioSessionCategoryOptionMixWithOthers;
+static BOOL hookCategory2(id self,SEL cmd,NSString *category,NSString *mode,AVAudioSessionCategoryOptions options,NSError **error) {
+    if(!origSetCategory2)return NO;
+    if(pdstmConfiguring)return origSetCategory2(self,cmd,category,mode,options,error);
+    category=PDSTMNormalizedCategory(category);
+    return origSetCategory2(self,cmd,category,mode,PDSTMNormalizedOptions(category,options),error);
+}
+static BOOL hookCategory3(id self,SEL cmd,NSString *category,NSString *mode,AVAudioSessionRouteSharingPolicy policy,AVAudioSessionCategoryOptions options,NSError **error) {
+    if(!origSetCategory3)return NO;
+    if(pdstmConfiguring)return origSetCategory3(self,cmd,category,mode,policy,options,error);
+    category=PDSTMNormalizedCategory(category);
+    return origSetCategory3(self,cmd,category,mode,policy,PDSTMNormalizedOptions(category,options),error);
+}
+static BOOL hookCategory4(id self,SEL cmd,NSString *category,AVAudioSessionCategoryOptions options,NSError **error) {
+    if(!origSetCategory4)return NO;
+    if(pdstmConfiguring)return origSetCategory4(self,cmd,category,options,error);
+    category=PDSTMNormalizedCategory(category);
+    return origSetCategory4(self,cmd,category,PDSTMNormalizedOptions(category,options),error);
+}
+static void PDSTMForceMix(NSString *reason) {
+    if(!PDSTMEnabled()||pdstmConfiguring)return;
+    pdstmConfiguring=YES;
+    AVAudioSession *s=[AVAudioSession sharedInstance];
+    NSString *category=PDSTMNormalizedCategory(s.category);
+    AVAudioSessionCategoryOptions requested=PDSTMNormalizedOptions(category,s.categoryOptions);
+    BOOL mustChange=![category isEqualToString:s.category] || requested!=s.categoryOptions;
+    if(mustChange) {
+        NSError *error=nil;
+        BOOL ok=NO;
+        if(origSetCategory2)ok=origSetCategory2(s,@selector(setCategory:mode:options:error:),category,s.mode,requested,&error);
+        else ok=[s setCategory:category mode:s.mode options:requested error:&error];
+        NSLog(@"[PDSTM] %@ category %@ mode %@ opts=%lu success=%d error=%@",reason,category,s.mode,(unsigned long)requested,ok,error);
     }
-    return origSetCategory2(self,cmd,cat,mode,opts,err);
+    pdstmConfiguring=NO;
 }
-static BOOL hookCategory3(id self,SEL cmd,NSString *cat,NSString *mode,AVAudioSessionRouteSharingPolicy policy,AVAudioSessionCategoryOptions opts,NSError **err) {
-    if(PDSTMShouldMix(self)) {
-        if([cat isEqualToString:AVAudioSessionCategorySoloAmbient])cat=AVAudioSessionCategoryAmbient;
-        opts|=AVAudioSessionCategoryOptionMixWithOthers;
-    }
-    return origSetCategory3(self,cmd,cat,mode,policy,opts,err);
+static BOOL hookActive1(id self,SEL cmd,BOOL active,NSError **error) {
+    if(active)PDSTMForceMix(@"setActive:");
+    return origSetActive1?origSetActive1(self,cmd,active,error):NO;
 }
-static BOOL hookCategory4(id self,SEL cmd,NSString *cat,AVAudioSessionCategoryOptions opts,NSError **err) {
-    if(PDSTMShouldMix(self)) {
-        if([cat isEqualToString:AVAudioSessionCategorySoloAmbient])cat=AVAudioSessionCategoryAmbient;
-        opts|=AVAudioSessionCategoryOptionMixWithOthers;
-    }
-    return origSetCategory4(self,cmd,cat,opts,err);
-}
-static void ensureMixForActivation(AVAudioSession *session, BOOL active) {
-    if(!active || !PDSTMShouldMix(session) || (session.categoryOptions & AVAudioSessionCategoryOptionMixWithOthers)) return;
-    NSString *cat=session.category;
-    if([cat isEqualToString:AVAudioSessionCategorySoloAmbient])cat=AVAudioSessionCategoryAmbient;
-    [session setCategory:cat mode:session.mode options:session.categoryOptions | AVAudioSessionCategoryOptionMixWithOthers error:nil];
-}
-static BOOL hookActive1(id self,SEL cmd,BOOL active,NSError **err) {
-    ensureMixForActivation(self,active);
-    return origSetActive1(self,cmd,active,err);
-}
-static BOOL hookActive2(id self,SEL cmd,BOOL active,AVAudioSessionSetActiveOptions opts,NSError **err) {
-    ensureMixForActivation(self,active);
-    return origSetActive2(self,cmd,active,opts,err);
+static BOOL hookActive2(id self,SEL cmd,BOOL active,AVAudioSessionSetActiveOptions options,NSError **error) {
+    if(active)PDSTMForceMix(@"setActive:withOptions:");
+    return origSetActive2?origSetActive2(self,cmd,active,options,error):NO;
 }
 
-
-
+// Relative volume: only the YouTube-process AVPlayer and AVAudioPlayer
+// instances can be controlled. iOS does not expose third-party music
+// apps' individual volume through this app.
+static void (*origAVPlayerSetVolume)(id,SEL,float);
+static void (*origAVPlayerPlay)(id,SEL);
+static void (*origAVPlayerPlayRate)(id,SEL,float);
+static void (*origAudioPlayerSetVolume)(id,SEL,float);
+static BOOL (*origAudioPlayerPlay)(id,SEL);
+static float PDSTMVolume(void) {
+    id saved=[[NSUserDefaults standardUserDefaults] objectForKey:PDSTMVolumeKey];
+    return saved?fmaxf(0.f,fminf(1.f,[saved floatValue])):1.f;
+}
+static void PDSTMSetSavedVolume(float value) {
+    [[NSUserDefaults standardUserDefaults] setFloat:fmaxf(0.f,fminf(1.f,value)) forKey:PDSTMVolumeKey];
+}
+static float PDSTMDesiredVolume(id player) {
+    NSNumber *saved=objc_getAssociatedObject(player,kVolumeOriginalKey);
+    return saved?saved.floatValue:1.f;
+}
+static void PDSTMTrackPlayer(NSHashTable *table,id player) {
+    if(!table||!player)return;
+    @synchronized(table){[table addObject:player];}
+}
+static void PDSTMApplyPlayerVolume(id player,BOOL isAV) {
+    float scaled=PDSTMDesiredVolume(player)*PDSTMVolume();
+    if(isAV&&origAVPlayerSetVolume)origAVPlayerSetVolume(player,@selector(setVolume:),scaled);
+    else if(!isAV&&origAudioPlayerSetVolume)origAudioPlayerSetVolume(player,@selector(setVolume:),scaled);
+}
+static void PDSTMApplyAllVolumes(void) {
+    NSArray *players=nil;
+    @synchronized(pdstmAVPlayers) {players=pdstmAVPlayers.allObjects;}
+    for(id player in players)PDSTMApplyPlayerVolume(player,YES);
+    @synchronized(pdstmAudioPlayers) {players=pdstmAudioPlayers.allObjects;}
+    for(id player in players)PDSTMApplyPlayerVolume(player,NO);
+}
+static void hookAVPlayerSetVolume(id self,SEL cmd,float value) {
+    objc_setAssociatedObject(self,kVolumeOriginalKey,@(value),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    PDSTMTrackPlayer(pdstmAVPlayers,self);
+    if(origAVPlayerSetVolume)origAVPlayerSetVolume(self,cmd,value*PDSTMVolume());
+}
+static void hookAVPlayerPlay(id self,SEL cmd) {
+    PDSTMForceMix(@"AVPlayer.play");
+    PDSTMTrackPlayer(pdstmAVPlayers,self);
+    PDSTMApplyPlayerVolume(self,YES);
+    if(origAVPlayerPlay)origAVPlayerPlay(self,cmd);
+}
+static void hookAVPlayerPlayRate(id self,SEL cmd,float rate) {
+    PDSTMForceMix(@"AVPlayer.playImmediatelyAtRate:");
+    PDSTMTrackPlayer(pdstmAVPlayers,self);
+    PDSTMApplyPlayerVolume(self,YES);
+    if(origAVPlayerPlayRate)origAVPlayerPlayRate(self,cmd,rate);
+}
+static void hookAudioPlayerSetVolume(id self,SEL cmd,float value) {
+    objc_setAssociatedObject(self,kVolumeOriginalKey,@(value),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    PDSTMTrackPlayer(pdstmAudioPlayers,self);
+    if(origAudioPlayerSetVolume)origAudioPlayerSetVolume(self,cmd,value*PDSTMVolume());
+}
+static BOOL hookAudioPlayerPlay(id self,SEL cmd) {
+    PDSTMForceMix(@"AVAudioPlayer.play");
+    PDSTMTrackPlayer(pdstmAudioPlayers,self);
+    PDSTMApplyPlayerVolume(self,NO);
+    return origAudioPlayerPlay?origAudioPlayerPlay(self,cmd):NO;
+}
+static NSString *PDSTMStatus(void) {
+    AVAudioSession *s=[AVAudioSession sharedInstance];
+    return s.isOtherAudioPlaying ? @"다른 앱 오디오 감지됨" : @"다른 앱 오디오 감지 안 됨";
+}
+static NSString *PDSTMSessionDescription(void) {
+    AVAudioSession *s=[AVAudioSession sharedInstance];
+    BOOL mix=(s.categoryOptions & AVAudioSessionCategoryOptionMixWithOthers)!=0
+            || [s.category isEqualToString:AVAudioSessionCategoryAmbient];
+    return [NSString stringWithFormat:
+        @"외부 오디오: %@\n앱 식별: iOS에서 제공하지 않음\n\n현재 카테고리: %@\n오디오 혼합 옵션: %@\n앱 내 볼륨 조절 지원: AVPlayer/AVAudioPlayer\n\n음악이 멈춘다면 먼저 YouTube Music을 재생한 다음 YouTube 영상을 재생하고, 이 화면에서 혼합 옵션이 켜져 있는지 확인하세요.",
+        s.isOtherAudioPlaying?@"재생 감지":@"감지 안 됨",s.category,
+        mix?@"켜짐":@"꺼짐"];
+}
 // Native YouTube Settings integration, using the same categories API as
 // YTweaks, Gonerino and YouGroupSettings. This places an entry in Tweaks
 // instead of relying on an overlay or an unrelated YTPlus view controller.
