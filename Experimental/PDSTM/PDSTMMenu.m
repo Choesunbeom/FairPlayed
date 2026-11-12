@@ -70,88 +70,124 @@ static BOOL hookActive2(id self,SEL cmd,BOOL active,AVAudioSessionSetActiveOptio
 }
 
 
-static const char kToggleButton;
-static NSString *PDSTMButtonTitle(void) {
-    return [NSString stringWithFormat:@"동시 재생 · %@",PDSTMEnabled()?@"켜짐":@"꺼짐"];
+
+// Native YouTube Settings integration, using the same categories API as
+// YTweaks, Gonerino and YouGroupSettings. This places an entry in Tweaks
+// instead of relying on an overlay or an unrelated YTPlus view controller.
+#import <objc/message.h>
+static const NSInteger PDSTMCategory = 0x70647374; // 'pdst'
+static NSArray *(*originalTweaks)(id,SEL);
+static NSArray *(*originalOrderedCategories)(id,SEL);
+static NSArray *(*originalSettingsCategoryOrder)(id,SEL);
+static void (*originalUpdateSection)(id,SEL,NSUInteger,id);
+
+static NSArray *PDSTMAppendCategory(NSArray *source) {
+    NSMutableArray *items=[source isKindOfClass:NSArray.class] ? [source mutableCopy] : [NSMutableArray array];
+    if(![items containsObject:@(PDSTMCategory)]) [items addObject:@(PDSTMCategory)];
+    return items.copy;
 }
-@interface UIViewController (PDSTMMenu)
-- (void)pdstm_openMusicMenu:(id)sender;
-@end
-@implementation UIViewController (PDSTMMenu)
-- (void)pdstm_openMusicMenu:(id)sender {
-    BOOL enabled=PDSTMEnabled();
-    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"동시 재생"
-        message:[NSString stringWithFormat:@"현재: %@\nYouTube Music 등 다른 앱에서 음악을 듣는 동안 동영상을 재생해도 음악이 중단되지 않도록 시도합니다. 변경은 다음 재생부터 적용됩니다.",enabled?@"켜짐":@"꺼짐"]
-        preferredStyle:UIAlertControllerStyleAlert];
-    __weak UIViewController *weakSelf=self;
-    [alert addAction:[UIAlertAction actionWithTitle:enabled?@"끄기":@"켜기" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
-        [[NSUserDefaults standardUserDefaults] setBool:!enabled forKey:kPDSTMKey];
-        UIButton *btn=objc_getAssociatedObject(weakSelf,&kToggleButton);
-        [btn setTitle:PDSTMButtonTitle() forState:UIControlStateNormal];
-    }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"닫기" style:UIAlertActionStyleCancel handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
+static NSArray *PDSTMTweaks(id cls,SEL cmd) {
+    return PDSTMAppendCategory(originalTweaks?originalTweaks(cls,cmd):nil);
 }
-@end
-// The actual YTPlus 6.0 screens in YTLite.dylib are YTPSettingsPage and
-// YTPSettingsSplitController. The previous YTSettingsViewController hook
-// therefore never attached our menu.
-static void PDSTMInstallVisibleToggle(UIViewController *vc) {
-    if(!vc.isViewLoaded || !vc.view) return;
-    UIButton *existing=objc_getAssociatedObject(vc,&kToggleButton);
-    if(existing) {
-        [existing setTitle:PDSTMButtonTitle() forState:UIControlStateNormal];
-        UIView *top=existing;
-        while(top.superview && top.superview!=vc.view) top=top.superview;
-        if(top.superview==vc.view) [vc.view bringSubviewToFront:top];
+static NSArray *PDSTMOrderedCategories(id self,SEL cmd) {
+    NSArray *items=originalOrderedCategories?originalOrderedCategories(self,cmd):@[];
+    // YouGroupSettings uses group type=1 for Tweaks. Gonerino also adds
+    // the legacy shared Tweaks group (0x70737974).
+    NSInteger type=NSNotFound;
+    @try {type=[[self valueForKey:@"type"] integerValue];} @catch(NSException *e){}
+    if(type==1 || type==0x70737974) return PDSTMAppendCategory(items);
+    return items;
+}
+static NSArray *PDSTMCategoryOrder(id cls,SEL cmd) {
+    NSArray *items=originalSettingsCategoryOrder?originalSettingsCategoryOrder(cls,cmd):@[];
+    NSMutableArray *result=[items mutableCopy]?:[NSMutableArray array];
+    if(![result containsObject:@(PDSTMCategory)]) {
+        NSUInteger pos=[result indexOfObject:@(1)];
+        [result insertObject:@(PDSTMCategory) atIndex:(pos==NSNotFound?result.count:MIN(pos+1,result.count))];
+    }
+    return result.copy;
+}
+static id PDSTMDelegate(id manager) {
+    for(NSString *key in @[@"_dataDelegate",@"_settingsViewControllerDelegate"]) {
+        @try {
+            id vc=[manager valueForKey:key];
+            if(vc && [vc respondsToSelector:@selector(setSectionItems:forCategory:title:icon:titleDescription:headerHidden:)])return vc;
+            if(vc && [vc respondsToSelector:@selector(setSectionItems:forCategory:title:titleDescription:headerHidden:)])return vc;
+        }@catch(NSException *e){}
+    }
+    return nil;
+}
+static id PDSTMToggleItem(void) {
+    Class row=objc_getClass("YTSettingsSectionItem");
+    SEL sel=NSSelectorFromString(@"switchItemWithTitle:titleDescription:accessibilityIdentifier:switchOn:switchBlock:");
+    NSString *explanation=@"다른 앱의 음악과 YouTube 동영상 소리를 함께 재생합니다. 음악이 멈추는 경우 앱을 재실행한 뒤 사용하세요.";
+    if(row && [row respondsToSelector:sel]) {
+        typedef id (*MakeSwitch)(id,SEL,NSString*,NSString*,NSString*,BOOL,id);
+        id handler=^BOOL(id cell,BOOL enabled) {
+            [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kPDSTMKey];
+            NSLog(@"[PDSTM] settings changed to %@",enabled?@"ON":@"OFF");
+            return YES;
+        };
+        return ((MakeSwitch)objc_msgSend)(row,sel,@"동시 재생",explanation,@"PDSTMEnabled",PDSTMEnabled(),handler);
+    }
+    // Fallback for older YouTube builds that have no switchItem factory:
+    // selecting the native settings row toggles the saved preference.
+    sel=NSSelectorFromString(@"itemWithTitle:titleDescription:accessibilityIdentifier:detailTextBlock:selectBlock:");
+    if(row && [row respondsToSelector:sel]) {
+        typedef id(*MakeItem)(id,SEL,NSString*,NSString*,NSString*,id,id);
+        id value=^NSString*{return PDSTMEnabled()?@"켜짐":@"꺼짐";};
+        id onSelect=^BOOL(id cell,NSUInteger idx){
+            [[NSUserDefaults standardUserDefaults] setBool:!PDSTMEnabled() forKey:kPDSTMKey];
+            return YES;
+        };
+        return ((MakeItem)objc_msgSend)(row,sel,@"동시 재생",explanation,@"PDSTMEnabled",value,onSelect);
+    }
+    return nil;
+}
+static void PDSTMUpdateSection(id manager,SEL cmd,NSUInteger category,id entry) {
+    if(category!=PDSTMCategory) {
+        if(originalUpdateSection)originalUpdateSection(manager,cmd,category,entry);
         return;
     }
-    UIVisualEffectView *glass=[[UIVisualEffectView alloc] initWithEffect:
-        [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
-    glass.translatesAutoresizingMaskIntoConstraints=NO;
-    glass.layer.cornerRadius=23;
-    glass.layer.masksToBounds=YES;
-    glass.layer.borderWidth=0.75;
-    glass.layer.borderColor=[UIColor.labelColor colorWithAlphaComponent:0.22].CGColor;
-    UIButton *button=[UIButton buttonWithType:UIButtonTypeSystem];
-    button.translatesAutoresizingMaskIntoConstraints=NO;
-    button.titleLabel.font=[UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
-    button.tintColor=UIColor.labelColor;
-    [button setTitleColor:UIColor.labelColor forState:UIControlStateNormal];
-    [button setImage:[UIImage systemImageNamed:@"waveform"] forState:UIControlStateNormal];
-    [button setTitle:PDSTMButtonTitle() forState:UIControlStateNormal];
-    button.contentEdgeInsets=UIEdgeInsetsMake(13,18,13,18);
-    button.accessibilityLabel=@"동시 재생 설정";
-    [button addTarget:vc action:@selector(pdstm_openMusicMenu:)
-         forControlEvents:UIControlEventTouchUpInside];
-    [glass.contentView addSubview:button];
-    [vc.view addSubview:glass];
-    [NSLayoutConstraint activateConstraints:@[
-        [button.leadingAnchor constraintEqualToAnchor:glass.contentView.leadingAnchor],
-        [button.trailingAnchor constraintEqualToAnchor:glass.contentView.trailingAnchor],
-        [button.topAnchor constraintEqualToAnchor:glass.contentView.topAnchor],
-        [button.bottomAnchor constraintEqualToAnchor:glass.contentView.bottomAnchor],
-        [glass.trailingAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.trailingAnchor constant:-16],
-        [glass.bottomAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.bottomAnchor constant:-18]
-    ]];
-    objc_setAssociatedObject(vc,&kToggleButton,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    NSLog(@"[PDSTM] attached visible setting to %@",NSStringFromClass(vc.class));
+    id delegate=PDSTMDelegate(manager);
+    if(!delegate) {NSLog(@"[PDSTM] settings delegate unavailable");return;}
+    id item=PDSTMToggleItem();
+    NSMutableArray *rows=[NSMutableArray array];
+    if(item)[rows addObject:item];
+    Class ic=objc_getClass("YTIIcon");
+    id icon=ic?[ic new]:nil;
+    // Use native settings icon when supported. Other tweaks already use
+    // iconType to choose their sidebar icon; a gear icon is a safe fallback.
+    if(icon && [icon respondsToSelector:@selector(setIconType:)]) {
+        ((void(*)(id,SEL,NSInteger))objc_msgSend)(icon,@selector(setIconType:),28);
+    }
+    SEL withIcon=NSSelectorFromString(@"setSectionItems:forCategory:title:icon:titleDescription:headerHidden:");
+    SEL withoutIcon=NSSelectorFromString(@"setSectionItems:forCategory:title:titleDescription:headerHidden:");
+    if(icon && [delegate respondsToSelector:withIcon]) {
+        ((void(*)(id,SEL,id,NSInteger,id,id,id,BOOL))objc_msgSend)(delegate,withIcon,rows,PDSTMCategory,@"PleaseDontStopTheMusic",icon,nil,NO);
+    } else if([delegate respondsToSelector:withoutIcon]) {
+        ((void(*)(id,SEL,id,NSInteger,id,id,BOOL))objc_msgSend)(delegate,withoutIcon,rows,PDSTMCategory,@"PleaseDontStopTheMusic",nil,NO);
+    }
+    NSLog(@"[PDSTM] native Tweaks category added (id=%ld, rows=%lu)",(long)PDSTMCategory,(unsigned long)rows.count);
 }
-static void PDSTMInstallNavToggle(UIViewController *vc) {
-    NSMutableArray *items=[vc.navigationItem.rightBarButtonItems mutableCopy]?:[NSMutableArray array];
-    for(UIBarButtonItem *i in items) if([i.title isEqualToString:@"동시 재생"]) return;
-    UIBarButtonItem *b=[[UIBarButtonItem alloc] initWithTitle:@"동시 재생" style:UIBarButtonItemStylePlain target:vc action:@selector(pdstm_openMusicMenu:)];
-    [items addObject:b];
-    [vc.navigationItem setRightBarButtonItems:items animated:NO];
+static void PDSTMHookClass(Class cls,SEL sel,IMP replacement,IMP *orig,BOOL isClass) {
+    if(!cls)return;
+    Class target=isClass?object_getClass(cls):cls;
+    Method method=class_getInstanceMethod(target,sel);
+    if(method && class_getMethodImplementation(target,sel)) {
+        MSHookMessageEx(target,sel,replacement,orig);
+        NSLog(@"[PDSTM] hook %@ on %@",NSStringFromSelector(sel),NSStringFromClass(cls));
+    }
 }
-static void PDSTMPageDidAppear(id self,SEL sel,BOOL animated) {
-    if(origSettingsPageAppeared)origSettingsPageAppeared(self,sel,animated);
-    PDSTMInstallVisibleToggle((UIViewController *)self);
-    PDSTMInstallNavToggle((UIViewController *)self);
-}
-static void PDSTMSplitDidAppear(id self,SEL sel,BOOL animated) {
-    if(origSettingsSplitAppeared)origSettingsSplitAppeared(self,sel,animated);
-    PDSTMInstallNavToggle((UIViewController *)self);
+static void PDSTMInstallNativeSettings(void) {
+    Class group=objc_getClass("YTSettingsGroupData");
+    Class order=objc_getClass("YTAppSettingsPresentationData");
+    Class mgr=objc_getClass("YTSettingsSectionItemManager");
+    PDSTMHookClass(group,@selector(tweaks),(IMP)PDSTMTweaks,(IMP*)&originalTweaks,YES);
+    PDSTMHookClass(group,@selector(orderedCategories),(IMP)PDSTMOrderedCategories,(IMP*)&originalOrderedCategories,NO);
+    PDSTMHookClass(order,@selector(settingsCategoryOrder),(IMP)PDSTMCategoryOrder,(IMP*)&originalSettingsCategoryOrder,YES);
+    PDSTMHookClass(mgr,@selector(updateSectionForCategory:withEntry:),(IMP)PDSTMUpdateSection,(IMP*)&originalUpdateSection,NO);
+    NSLog(@"[PDSTM] native Tweaks registration group=%@ manager=%@",group,mgr);
 }
 
 __attribute__((constructor)) static void PDSTMInit(void) {
@@ -166,10 +202,6 @@ __attribute__((constructor)) static void PDSTMInit(void) {
             MSHookMessageEx(av,@selector(setActive:error:),(IMP)hookActive1,(IMP *)&origSetActive1);
             MSHookMessageEx(av,@selector(setActive:withOptions:error:),(IMP)hookActive2,(IMP *)&origSetActive2);
         }
-        Class page=objc_getClass("YTPSettingsPage");
-        Class split=objc_getClass("YTPSettingsSplitController");
-        if(page)MSHookMessageEx(page,@selector(viewDidAppear:),(IMP)PDSTMPageDidAppear,(IMP *)&origSettingsPageAppeared);
-        if(split)MSHookMessageEx(split,@selector(viewDidAppear:),(IMP)PDSTMSplitDidAppear,(IMP *)&origSettingsSplitAppeared);
-        NSLog(@"[PDSTM] YTPlus actual settings: page=%@ split=%@",page,split);
+        PDSTMInstallNativeSettings();
     }
 }
