@@ -1,0 +1,39 @@
+name: Build PDSTM in-app settings tweak
+on:
+  push:
+    paths:
+      - 'Experimental/PDSTM/**'
+      - '.github/workflows/build-pdstm-menu.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ARM64 dylib for iOS
+        run: |
+          set -euo pipefail
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun --sdk iphoneos clang -x objective-c -arch arm64 -target arm64-apple-ios17.0 \
+            -isysroot "$SDK" -fobjc-arc -fblocks -O2 -dynamiclib \
+            -install_name '@rpath/PleaseDontStopTheMusic.dylib' \
+            -Wl,-undefined,dynamic_lookup \
+            -framework UIKit -framework Foundation -framework AVFoundation \
+            Experimental/PDSTM/PDSTMMenu.m -o PleaseDontStopTheMusic.dylib
+          file PleaseDontStopTheMusic.dylib
+          xcrun otool -L PleaseDontStopTheMusic.dylib
+      - name: Publish source-based tweak binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG='pdstm-ytplus-settings-v1'
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title 'YTPlus PleaseDontStopTheMusic settings module' --notes 'ARM64 iOS library. Built from Experimental/PDSTM/PDSTMMenu.m for local IPA injection.'
+          fi
+          gh release upload "$TAG" PleaseDontStopTheMusic.dylib --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PDSTM-Menu-iOS-arm64
+          path: PleaseDontStopTheMusic.dylib
