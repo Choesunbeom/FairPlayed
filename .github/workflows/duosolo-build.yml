@@ -36,7 +36,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import gzip,base64,hashlib
+          import gzip,base64,hashlib,os
           target=Path('duosolo/output/DuoSoloSettings.dylib')
           raw=target.read_bytes() if target.exists() else b''
           data=base64.b64encode(gzip.compress(raw,compresslevel=9)).decode() if raw else ''
@@ -45,7 +45,7 @@ jobs:
           for n in out.glob('*.txt'): n.unlink()
           for i in range(0,len(data),5000):
               (out/f'{i//5000:03d}.txt').write_text(data[i:i+5000])
-          (out/'manifest.txt').write_text(f"bytes={len(raw)}\nsha256={hashlib.sha256(raw).hexdigest()}\nchunks={(len(data)+4999)//5000}\n")
+          (out/'manifest.txt').write_text(f"bytes={len(raw)}\nsha256={hashlib.sha256(raw).hexdigest()}\nchunks={(len(data)+4999)//5000}\nrun_id={os.environ.get('GITHUB_RUN_ID','')}\n")
           PY
           git config user.name "DuoSolo CI"
           git config user.email "actions@users.noreply.github.com"
