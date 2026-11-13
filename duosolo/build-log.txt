@@ -5,5 +5,80 @@ src/DuoSoloShim.mm:43:62: warning: 'windows' is deprecated: first deprecated in 
   109 | @property(nonatomic,readonly) NSArray<__kindof UIWindow *>  *windows API_DEPRECATED("Use UIWindowScene.windows on a relevant window scene instead", ios(2.0, 15.0), visionos(1.0, 1.0)) API_UNAVAILABLE(watchos);
       |                                                              ^
 1 warning generated.
-error: invalid argument '-std=c++17' not allowed with 'Objective-C'
-error: invalid argument '-std=c++17' not allowed with 'Objective-C'
+Undefined symbols for architecture arm64:
+  "_CGAffineTransformIdentity", referenced from:
+      _DUOUpdateDeskReflection in DuoDeskPosture-44f2c2.o
+  "_CGAffineTransformMakeScale", referenced from:
+      _DUOUpdateDeskReflection in DuoDeskPosture-44f2c2.o
+  "_CGRectEqualToRect", referenced from:
+      YTKACESetVideoFrame(UIView*, CGRect) in DuoDeskPlayer-5caa66.o
+      YTKACESetVideoFrame(UIView*, CGRect) in DuoDeskPlayer-5caa66.o
+  "_CGRectGetHeight", referenced from:
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      _DUOViewShowing in DuoKit-666efa.o
+      _DUOViewShowing in DuoKit-666efa.o
+      _DUOUpdateDeskReflection in DuoDeskPosture-44f2c2.o
+  "_CGRectGetMaxX", referenced from:
+      YTKACEDuoStatusBarPlayerLayout(UIView*) in DuoStatusBar-ff44b7.o
+      YTKACEDuoStatusBarPlayerLayout(UIView*) in DuoStatusBar-ff44b7.o
+      _DUOStatusItemsFrame in DuoKit-666efa.o
+  "_CGRectGetMaxY", referenced from:
+      YTKACEDeskFold(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDeskFold(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoStatusBarPlayerLayout(UIView*) in DuoStatusBar-ff44b7.o
+      YTKACEDuoStatusBarPlayerLayout(UIView*) in DuoStatusBar-ff44b7.o
+      ...
+  "_CGRectGetMidY", referenced from:
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+  "_CGRectGetMinX", referenced from:
+      YTKACEPlayerLayout(UIView*, objc_selector*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoStatusBarPlayerLayout(UIView*) in DuoStatusBar-ff44b7.o
+      YTKACEDuoStatusBarPlayerLayout(UIView*) in DuoStatusBar-ff44b7.o
+      _DUOStatusItemsFrame in DuoKit-666efa.o
+      _DUOUpdateDeskReflection in DuoDeskPosture-44f2c2.o
+  "_CGRectGetMinY", referenced from:
+      YTKACEDeskFold(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDeskFold(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEPlayerLayout(UIView*, objc_selector*) in DuoDeskPlayer-5caa66.o
+      YTKACEPlayerLayout(UIView*, objc_selector*) in DuoDeskPlayer-5caa66.o
+      ...
+  "_CGRectGetWidth", referenced from:
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEPlayerLayout(UIView*, objc_selector*) in DuoDeskPlayer-5caa66.o
+      _DUOViewShowing in DuoKit-666efa.o
+      _DUOViewShowing in DuoKit-666efa.o
+      _DUOUpdateDeskReflection in DuoDeskPosture-44f2c2.o
+  "_CGRectIntersection", referenced from:
+      _DUOViewShowing in DuoKit-666efa.o
+  "_CGRectIsEmpty", referenced from:
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+  "_CGRectIsNull", referenced from:
+      -[YTKACEDeskSwipe gestureRecognizerShouldBegin:] in DuoDeskPlayer-5caa66.o
+      YTKACEDeskFold(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoDeskControlsLayout(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEPlayerLayout(UIView*, objc_selector*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoStatusBarPlayerLayout(UIView*) in DuoStatusBar-ff44b7.o
+      _DUOViewShowing in DuoKit-666efa.o
+      _DUOUpdateDeskReflection in DuoDeskPosture-44f2c2.o
+      ...
+  "_CGRectNull", referenced from:
+      YTKACEDeskFold(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDeskFold(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEDeskFold(UIView*) in DuoDeskPlayer-5caa66.o
+      YTKACEPlayerLayout(UIView*, objc_selector*) in DuoDeskPlayer-5caa66.o
+      YTKACEPlayerLayout(UIView*, objc_selector*) in DuoDeskPlayer-5caa66.o
+      YTKACEDuoStatusBarPlayerLayout(UIView*) in DuoStatusBar-ff44b7.o
+      _DUOStatusItemsFrame in DuoKit-666efa.o
+      ...
+ld: symbol(s) not found for architecture arm64
+clang++: error: linker command failed with exit code 1 (use -v to see invocation)
