@@ -18,20 +18,28 @@ jobs:
         with:
           ref: duosolo-ytplus-build-20261113
       - name: Build iOS arm64 dylib
-        run: bash duosolo/build.sh
+        continue-on-error: true
+        run: |
+          bash duosolo/build.sh > duosolo/build-log.txt 2>&1
+          status=$?
+          cat duosolo/build-log.txt
+          exit $status
       - name: Upload artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: DuoSoloSettings-arm64
           path: duosolo/output/DuoSoloSettings.dylib
-      - name: Commit compressed artifact chunks
+      - name: Commit compressed artifact chunks and build log
+        if: always()
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import gzip,base64,hashlib
-          raw=Path('duosolo/output/DuoSoloSettings.dylib').read_bytes()
-          data=base64.b64encode(gzip.compress(raw,compresslevel=9)).decode()
+          target=Path('duosolo/output/DuoSoloSettings.dylib')
+          raw=target.read_bytes() if target.exists() else b''
+          data=base64.b64encode(gzip.compress(raw,compresslevel=9)).decode() if raw else ''
           out=Path('duosolo/output-b64')
           out.mkdir(parents=True,exist_ok=True)
           for n in out.glob('*.txt'): n.unlink()
@@ -41,6 +49,6 @@ jobs:
           PY
           git config user.name "DuoSolo CI"
           git config user.email "actions@users.noreply.github.com"
-          git add duosolo/output-b64/
-          git commit -m "CI: DuoSoloSettings dylib build output [skip ci]"
+          git add duosolo/output-b64/ duosolo/build-log.txt
+          git commit -m "CI: DuoSoloSettings build result [skip ci]" || true
           git push origin HEAD:duosolo-ytplus-build-20261113
