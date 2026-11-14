@@ -1,7 +1,7 @@
 name: YTMUltimate 9.44 Duo UI fixes — Xcode 27.1
 on:
   push:
-    branches: [feature/ytm-duo-layout-glass-27]
+    branches: [feature/ytm-duo-layout-glass-27, feature/ytm-duo-polished-v7]
     paths:
       - 'Experimental/YTMDuoLayout/**'
       - '.github/workflows/build-ytm-duo-layout.yml'
