@@ -35,6 +35,16 @@ static BOOL DuoIsFoldable(UIWindow *w) {
     return ratio<1.83;
 }
 static BOOL DuoPortrait(UIWindow *w) {return w && w.bounds.size.height>w.bounds.size.width;}
+// Exact full-size / cover-screen screenshot ratios: 1536x1081 (1.421)
+// versus 1536x1056 (1.455). UIKit uses points, same aspect ratio.
+// Only apply cover-specific corrections when the active UIWindow confirms it.
+static BOOL DuoCover(UIWindow *w) {
+    if(!DuoIsFoldable(w))return NO;
+    CGSize sz=w.bounds.size;
+    CGFloat ratio=MAX(sz.width,sz.height)/MAX(1,MIN(sz.width,sz.height));
+    return ratio>1.438f && ratio<1.72f;
+}
+
 static BOOL DuoHasFullscreenHint(NSString *value) {
     if(![value isKindOfClass:NSString.class])return NO;
     NSString *s=value.lowercaseString;
@@ -271,26 +281,11 @@ static void ytmFixQueueOverlay(UIView *tab,BOOL home,UIView *mini,UIWindow *w) {
     }
 }
 static UIVisualEffect *ytmGlassMaterial(void){
-    if(@available(iOS 26.0,*)){
-        Class cls=NSClassFromString(@"UIGlassEffect");
-        SEL sel=NSSelectorFromString(@"effectWithStyle:");
-        if(cls && [cls respondsToSelector:sel]){
-            id effect=((id(*)(id,SEL,NSInteger))objc_msgSend)(cls,sel,0);
-            if([effect isKindOfClass:UIVisualEffect.class]) {
-                // Native Liquid Glass must be STATIC here. YTM already
-                // handles tab gestures; a second interactive glass layer
-                // was producing an oversized expanding press halo.
-                SEL interactive=NSSelectorFromString(@"setInteractive:");
-                if([effect respondsToSelector:interactive])
-                    ((void(*)(id,SEL,BOOL))objc_msgSend)(effect,interactive,NO);
-                SEL tint=NSSelectorFromString(@"setTintColor:");
-                if([effect respondsToSelector:tint])
-                    ((void(*)(id,SEL,id))objc_msgSend)(effect,tint,
-                      [UIColor.blackColor colorWithAlphaComponent:0.13f]);
-                return effect;
-            }
-        }
-    }
+    // A static system material intentionally replaces the interactive
+    // UIGlassEffect on the pivot: the latter magnified YTM's built-in
+    // selection animation into the giant circular halo seen in screenshots.
+    // We still render a one-piece frosted, specular, rounded tab dock, but
+    // the native YTM buttons own all taps and their selected states.
     return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark];
 }
 static UIView *ytmTabItemContainer(YTMDuoViews *views,UIView *pivot){
@@ -311,7 +306,9 @@ static UIView *ytmTabItemContainer(YTMDuoViews *views,UIView *pivot){
 static void ytmDisablePivotInk(UIView *view,int depth){
     if(!view || depth>9)return;
     NSString *cls=NSStringFromClass(view.class);
-    if([cls containsString:@"MDCInkView"]){
+    if([cls containsString:@"MDCInkView"] ||
+       [cls containsString:@"MDCRippleView"] ||
+       [cls containsString:@"MDCInkTouchController"]){
         view.hidden=YES;
         view.alpha=0;
         return;
@@ -388,6 +385,10 @@ static void ytmFixGlassDock(YTMDuoViews *views,UIWindow *w,BOOL home){
     line.frame=CGRectMake(19,0.8,MAX(0,frame.size.width-38),0.6);
     glass.hidden=NO;
     [target sendSubviewToBack:glass];
+    // Suppress ripple layers newly attached on the pivot container too;
+    // YTPivotBarItemViewAccessibilityControl can create these as siblings
+    // AFTER the tab view is laid out, not inside an individual tab.
+    ytmDisablePivotInk(pivot,0);
     // Clip any remaining native ink-scale animations to the tab region.
     target.clipsToBounds=YES;
     pivot.clipsToBounds=YES;
