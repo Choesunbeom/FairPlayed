@@ -6,6 +6,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <math.h>
+#import <stdatomic.h>
 
 // Built specifically for the user's YTMUltimate 9.44.2 No-PIP IPA.
 // Does NOT alter the iOS audio session, mixWithOthers, or any existing
