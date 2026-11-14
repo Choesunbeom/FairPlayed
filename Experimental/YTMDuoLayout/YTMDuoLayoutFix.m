@@ -133,6 +133,7 @@ static void swizzleSpecific(Class cls,SEL sel,IMP newImp,IMP *oldImp) {
 //
 // Original audio module and the successful fullscreen guard above untouched.
 static const void *kDuoV8OriginalTransform=&kDuoV8OriginalTransform;
+static const void *kDuoV8AppliedOffset=&kDuoV8AppliedOffset;
 static const void *kDuoV8Glass=&kDuoV8Glass;
 static const void *kDuoV8GlassEffect=&kDuoV8GlassEffect;
 static const void *kDuoV8GlassIndicator=&kDuoV8GlassIndicator;
@@ -225,6 +226,7 @@ static void duoSetOriginalOffset(UIView *v,CGFloat dx){
     CGAffineTransform original=saved.CGAffineTransformValue;
     CGAffineTransform target=CGAffineTransformTranslate(original,dx,0);
     if(!CGAffineTransformEqualToTransform(target,v.transform))v.transform=target;
+    objc_setAssociatedObject(v,kDuoV8AppliedOffset,@(-dx),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 typedef struct {
     __unsafe_unretained UIView *avatar;
@@ -243,8 +245,8 @@ static void duoScanHeader(UIView *v,UIWindow *w,DuoHeaderHits *hits,
     BOOL reasonable=r.size.width>=15&&r.size.width<104 &&
                     r.size.height>=15&&r.size.height<104 &&
                     mid>w.bounds.size.width*.61;
-    if(reasonable && duoOnscreen(v,w)){
-        BOOL avatar=[cls containsString:@"AvatarAccount"] ||
+    if(reasonable && CGRectGetMidY(r)<36 && duoOnscreen(v,w)){
+        BOOL avatar=[cls containsString:@"Avatar"] ||
                    [cls containsString:@"AccountAvatar"] ||
                    [cls containsString:@"AccountIdentityView"];
         NSString *hint=[NSString stringWithFormat:@"%@ %@",
@@ -260,7 +262,7 @@ static void duoScanHeader(UIView *v,UIWindow *w,DuoHeaderHits *hits,
         }else if(([v isKindOfClass:UIControl.class] ||
                  [cls containsString:@"NavigationButton"] ||
                  [cls containsString:@"QTMButton"]) &&
-                 mid>hits->fallbackX && CGRectGetMidY(r)<94){
+                 mid>hits->fallbackX && CGRectGetMidY(r)<35){
             hits->fallback=v;hits->fallbackX=mid;
         }
     }
@@ -282,7 +284,8 @@ static void duoRepairHeader(UIWindow *w){
     // layout passes. A fixed offset is appropriate for the Duo status orb.
     CGFloat margin=MAX(83,w.safeAreaInsets.right+69);
     CGFloat desiredRight=w.bounds.size.width-margin;
-    CGFloat shift=MAX(64,MIN(125,CGRectGetMaxX(ar)-desiredRight+64));
+    CGFloat previous=[objc_getAssociatedObject(avatar,kDuoV8AppliedOffset) floatValue];
+    CGFloat shift=MAX(58,MIN(125,CGRectGetMaxX(ar)+previous-desiredRight+4));
     UIView *bell=hits.bell?duoTapRoot(hits.bell,w):nil;
     if(!bell){
         // Fallback: nearest tappable sibling left of the profile in the
@@ -430,7 +433,8 @@ static void duoRepairPortraitPlayer(UIWindow *w){
     DuoPanelChoice choice={0};
     choice.score=CGFLOAT_MAX;
     NSUInteger budget=0;
-    for(UIView *v in w.rootViewController.viewIfLoaded.subviews)
+    // The mini dock may be installed as a sibling of the main controller.
+    for(UIView *v in w.subviews)
         duoScanMiniPanel(v,w,&choice,&budget,0);
     if(!choice.panel)return;
     // The screenshot's invalid tray is approximately 95pt tall (not the
