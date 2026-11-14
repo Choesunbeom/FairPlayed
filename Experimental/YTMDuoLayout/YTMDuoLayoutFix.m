@@ -151,8 +151,11 @@ static void findButtons(UIView *root,NSMutableArray<UIView *> *buttons,int depth
     if(!root||depth>16)return;
     NSString *name=NSStringFromClass(root.class);
     BOOL candidate=[root isKindOfClass:UIControl.class] ||
-                   [name containsString:@"AccountButton"] ||
-                   [name containsString:@"NotificationButton"];
+                   [name containsString:@"Account"] ||
+                   [name containsString:@"Avatar"] ||
+                   [name containsString:@"Notification"] ||
+                   [name containsString:@"Bell"] ||
+                   [name containsString:@"Button"];
     if(candidate) [buttons addObject:root];
     for(UIView *sub in root.subviews)findButtons(sub,buttons,depth+1);
 }
@@ -221,6 +224,47 @@ static void fixHeader(UIView *header,UIWindow *w){
 
 // UIKit SDK 27.1: UIGlassEffect is created with +effectWithStyle:,
 // NOT -initWithStyle:. A real system material uses alpha == 1.
+// Geometry fallback for YTM 9.44, where profile/bell controls may sit
+// in a generic header view instead of YTMNavigationBarView. Select only the
+// TWO rightmost interactive items in the very top row, never the filter chips.
+static void fixHeaderByGeometry(UIView *root, UIWindow *w){
+    if(!root||!DuoIsFoldable(w))return;
+    NSMutableArray<UIView *> *buttons=[NSMutableArray array];
+    findButtons(root,buttons,0);
+    CGFloat width=w.bounds.size.width;
+    CGFloat shift=MIN(76,MAX(56,width*0.105));
+    UIView *right=nil,*second=nil;
+    CGFloat rightX=-CGFLOAT_MAX,secondX=-CGFLOAT_MAX;
+    CGFloat rightY=-1;
+    for(UIView *button in buttons) {
+        if(!viewVisible(button,w))continue;
+        CGRect r=[button convertRect:button.bounds toView:w];
+        if(r.size.width<19||r.size.width>85||r.size.height<18||r.size.height>83)
+            continue;
+        CGFloat y=CGRectGetMidY(r);
+        // Bell/avatar are near the system clock; the category chips are
+        // on the second row and must never be moved.
+        if(y<8 || y>MIN(57,w.safeAreaInsets.top+32))continue;
+        NSString *cls=NSStringFromClass(button.class);
+        if([cls containsString:@"StatusBar"]||[cls containsString:@"Battery"]||
+           [cls containsString:@"Wifi"]||[cls containsString:@"Signal"])continue;
+        CGFloat originalX=CGRectGetMidX(r);
+        if(objc_getAssociatedObject(button,kDuoShiftKey))originalX+=shift;
+        if(originalX<width-145 || originalX>width+10)continue;
+        if(originalX>rightX){
+            second=right;secondX=rightX;
+            right=button;rightX=originalX;rightY=y;
+        } else if(originalX>secondX && fabs(originalX-rightX)>19 &&
+                  (rightY<0 || fabs(y-rightY)<24)) {
+            second=button;secondX=originalX;
+        }
+    }
+    if(right)duoShift(right,-shift);
+    if(second && second!=right &&
+       fabs(rightX-secondX)>20 && fabs(rightX-secondX)<125)
+        duoShift(second,-shift);
+}
+
 static UIVisualEffect *systemGlass(void){
     if(@available(iOS 26.0,*)){
         Class cls=NSClassFromString(@"UIGlassEffect");
