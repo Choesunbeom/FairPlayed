@@ -545,42 +545,78 @@ static void ytmCoverMiniReflow(UIView *mini,UIView *pivot,UIWindow *w){
 // v14: the supplied JSON confirms the mini and its gradient host are both
 // full width (678pt), but the screenshot shows a centered ~441pt payload.
 // Check ONLY internal mini containers, never replace the working mini view.
-static UIView *ytmNarrowMiniChild(UIView *root,UIWindow *w,int depth){
-    if(!root||!w||depth>4)return nil;
-    for(UIView *v in root.subviews){
-        CGRect r=[v convertRect:v.bounds toView:w];
-        NSString *cls=NSStringFromClass(v.class);
-        BOOL structural=![v isKindOfClass:UIControl.class] &&
-                        ![v isKindOfClass:UILabel.class] &&
-                        ![v isKindOfClass:UIImageView.class] &&
-                        ![v isKindOfClass:UIScrollView.class];
-        BOOL centered=fabs(CGRectGetMidX(r)-w.bounds.size.width/2)<35;
-        BOOL narrow=r.size.width>=280 &&
-                    r.size.width<w.bounds.size.width*.84f;
-        BOOL tall=r.size.height>=44 && r.size.height<=82;
-        if(structural && centered && narrow && tall &&
-           v.subviews.count>=2 && !v.hidden)return v;
-    }
-    // Diagnostic / correction intentionally avoids deeper, ambiguous
-    // views such as lyric labels and artwork.
-    return nil;
-}
-static void ytmCoverRestoreMiniWidth(UIView *mini,UIWindow *w){
+// v14 logs expose the precise cause of the 440pt-wide cover mini strip:
+// while the YTMMiniPlayerView itself is 678pt wide, its first-level
+// collection container is only 344.7pt, followed by two 40pt action buttons
+// at x344.7 and x392.7. The child had never been widened because v14's
+// "centered" condition was FALSE (the child is left-anchored at x0).
+// Rebalance that ONE internal row: collection (W-96), cast, play.
+static void ytmFitCoverMiniContents(UIView *mini,UIWindow *w){
     if(!mini||!w||!DuoCover(w)||DuoPortrait(w))return;
-    UIView *content=ytmNarrowMiniChild(mini,w,0);
-    if(!content || !content.superview)return;
-    CGRect bounds=[w convertRect:CGRectMake(0,
-                      [mini convertRect:mini.bounds toView:w].origin.y,
-                      w.bounds.size.width,mini.bounds.size.height)
-                            toView:content.superview];
-    if(bounds.size.width<w.bounds.size.width*.94 ||
-       bounds.size.height<48)return;
-    // Use native frame only; do not change system audio / player controls.
-    if(fabs(content.frame.size.width-bounds.size.width)>20){
-        content.frame=bounds;
-        [content setNeedsLayout];
-        NSLog(@"[YTMDuoFix] widened narrow mini content %@",NSStringFromClass(content.class));
+    CGFloat W=mini.bounds.size.width;
+    if(W<620 || W>800)return; // specifically 678pt cover landscape
+    CGRect mr=[mini convertRect:mini.bounds toView:w];
+    if(mr.size.height<58||mr.size.height>71 ||
+       mr.origin.y<w.bounds.size.height*.48)return;
+    UIView *strip=nil;
+    UICollectionView *collection=nil;
+    NSMutableArray<UIView *> *buttons=[NSMutableArray array];
+    for(UIView *v in mini.subviews){
+        NSString *name=NSStringFromClass(v.class);
+        if([name isEqualToString:@"MDCFloatingButton"] &&
+            v.bounds.size.width>=36 && v.bounds.size.width<=50)
+            [buttons addObject:v];
+        if([name isEqualToString:@"UIView"] && v.bounds.size.width>280 &&
+           v.bounds.size.width<W*.76f && v.bounds.size.height>=55){
+            for(UIView *child in v.subviews) {
+                if([child isKindOfClass:UICollectionView.class]){
+                    strip=v;collection=(UICollectionView *)child;break;
+                }
+            }
+        }
     }
+    if(!strip||!collection||buttons.count!=2)return;
+    [buttons sortUsingComparator:^NSComparisonResult(UIView *a,UIView *b){
+        return a.frame.origin.x<b.frame.origin.x?NSOrderedAscending:
+               a.frame.origin.x>b.frame.origin.x?NSOrderedDescending:
+               NSOrderedSame;
+    }];
+    CGFloat textWidth=W-96.0f;
+    BOOL needsChange=fabs(strip.frame.size.width-textWidth)>3;
+    for(NSUInteger i=0;i<2;i++){
+        CGFloat targetX=textWidth+48.0f*i;
+        if(fabs(buttons[i].frame.origin.x-targetX)>3)needsChange=YES;
+    }
+    if(!needsChange)return;
+    [UIView performWithoutAnimation:^{
+        CGRect contentFrame=strip.frame;
+        contentFrame.origin.x=0;
+        contentFrame.size.width=textWidth;
+        strip.frame=contentFrame;
+        CGRect collectionFrame=collection.frame;
+        collectionFrame.origin.x=0;
+        collectionFrame.size.width=textWidth;
+        collection.frame=collectionFrame;
+        for(NSUInteger i=0;i<buttons.count;i++){
+            UIView *button=buttons[i];
+            CGRect r=button.frame;
+            r.origin.x=textWidth+48.0f*i;
+            button.frame=r;
+        }
+        [collection.collectionViewLayout invalidateLayout];
+    }];
+    static BOOL logged=NO;
+    if(!logged){
+        logged=YES;
+        NSLog(@"[YTMDuoFix] v15 cover mini row corrected from 344.7 to %.1fpt",textWidth);
+    }
+}
+static void (*oldYTMMiniplayerLayout)(id,SEL);
+static void ytmMiniplayerLayout(id self,SEL cmd){
+    if(oldYTMMiniplayerLayout)oldYTMMiniplayerLayout(self,cmd);
+    UIWindow *w=((UIView *)self).window;
+    if(w && DuoCover(w)&&!DuoPortrait(w))
+        ytmFitCoverMiniContents((UIView *)self,w);
 }
 static NSDictionary *ytmMiniDescendantInfo(UIView *v,UIWindow *w,NSInteger depth){
     CGRect r=[v convertRect:v.bounds toView:w];
@@ -633,7 +669,7 @@ static void ytmCoverRepairHome(UIWindow *w,YTMDuoViews *views,BOOL home){
         ytmAlignCoverHeaderPair(views->nav,w,0,2);
         ytmAlignCoverHeaderPair(filters,w,56,58);
         ytmCoverMiniReflow(views->mini,views->pivot,w);
-        ytmCoverRestoreMiniWidth(views->mini,w);
+        ytmFitCoverMiniContents(views->mini,w);
     }else{
         ytmRestoreCoverHeaderPair(views->nav);
         ytmRestoreCoverHeaderPair(filters);
@@ -667,7 +703,7 @@ static void ytmSaveCoverGeometry(UIWindow *w,YTMDuoViews *views){
       @"filtersParent":ytmScreenRect(filters.superview,w),
       @"pivot":ytmScreenRect(views->pivot,w),
       @"queue":ytmScreenRect(views->queue,w),
-      @"layoutFix":@"v14"
+      @"layoutFix":@"v15"
     };
     NSData *json=[NSJSONSerialization dataWithJSONObject:data
                 options:NSJSONWritingPrettyPrinted error:NULL];
@@ -715,6 +751,12 @@ __attribute__((constructor))static void duoBootstrap(void){
                         @selector(layoutSubviews),
                         (IMP)ytmNavigationLayout,
                         (IMP *)&oldYTMNavigationLayout);
+        // Repair exact mini child geometry directly after YTM's own
+        // layout (plus the timer fallback for transient cover rotations).
+        swizzleSpecific(NSClassFromString(@"YTMMiniPlayerView"),
+                        @selector(layoutSubviews),
+                        (IMP)ytmMiniplayerLayout,
+                        (IMP *)&oldYTMMiniplayerLayout);
         // Preserve the tested "only manual fullscreen" behavior.
         swizzleSpecific(UIWindow.class,@selector(sendEvent:),
                         (IMP)duoWindowSendEvent,(IMP *)&oldWindowEvent);
@@ -739,6 +781,6 @@ __attribute__((constructor))static void duoBootstrap(void){
             [[NSRunLoop mainRunLoop] addTimer:gLayoutTimer
                                      forMode:NSRunLoopCommonModes];
         });
-        NSLog(@"[YTMDuoFix] v14 cover header parent reflow and narrow mini content fix, unfolded layout unchanged");
+        NSLog(@"[YTMDuoFix] v15 stable cover nav reflow and exact 344.7pt mini row correction; unfolded/audio unchanged");
     }
 }
