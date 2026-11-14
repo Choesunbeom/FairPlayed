@@ -708,6 +708,86 @@ static void ytmMiniplayerLayout(id self,SEL cmd){
     if(w && DuoCover(w)&&!DuoPortrait(w))
         ytmFitCoverMiniContents((UIView *)self,w);
 }
+// v17: In the actual cover-landscape JSON the YTMWatchView contains one
+// empty, fully opaque UIView at x=118.33 y=320 w=440.67 h=64. This EXACT
+// rectangle is the black centered strip in the screenshot. Its sibling
+// YTMMiniPlayerView is already full-width, so repair only the rogue backdrop.
+static const void *kV17MiniBackdropKey=&kV17MiniBackdropKey;
+static BOOL gV17SurfaceRepairing=NO;
+static void ytmV17RepairMiniBackdrop(UIView *watch){
+    if(gV17SurfaceRepairing || !watch)return;
+    UIWindow *w=watch.window;
+    if(!DuoCover(w) || DuoPortrait(w))return;
+    CGFloat W=w.bounds.size.width;
+    if(W<660 || W>700)return; // user's 678pt cover landscape
+    UIView *mini=ytmFindViewByClass(watch,@"YTMMiniPlayerView",0);
+    UIView *pivot=ytmFindViewByClass(w,@"YTPivotBarView",0);
+    if(!ytmVisibleInWindow(mini,w) || !ytmVisibleInWindow(pivot,w))return;
+    CGRect m=[mini convertRect:mini.bounds toView:w];
+    if(m.size.width<W*.98 || m.size.height<60 || m.size.height>69)return;
+    gV17SurfaceRepairing=YES;
+    @try{
+        for(UIView *node in watch.subviews){
+            if(![node isMemberOfClass:UIView.class] ||
+               node.subviews.count!=0 || node.hidden ||
+               node.alpha<.9 || !node.backgroundColor)continue;
+            CGRect r=[node convertRect:node.bounds toView:w];
+            CGFloat bgAlpha=CGColorGetAlpha(node.backgroundColor.CGColor);
+            BOOL exact=bgAlpha>.92 &&
+              r.size.width>=W*.58 && r.size.width<=W*.75 &&
+              r.size.height>=61 && r.size.height<=67 &&
+              fabs(r.origin.y-m.origin.y)<2.5 &&
+              fabs(CGRectGetMidX(r)-W/2)<5;
+            // Once resized, keep it aligned following native layout.
+            BOOL already=objc_getAssociatedObject(node,kV17MiniBackdropKey)!=nil;
+            if(!exact && !already)continue;
+            if(!already)
+                objc_setAssociatedObject(node,kV17MiniBackdropKey,@YES,
+                        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            CGRect full=[w convertRect:CGRectMake(0,m.origin.y,W,m.size.height)
+                                 toView:watch];
+            if(fabs(node.frame.origin.x-full.origin.x)>.5 ||
+               fabs(node.frame.size.width-full.size.width)>.5 ||
+               fabs(node.frame.origin.y-full.origin.y)>.5){
+                [UIView performWithoutAnimation:^{node.frame=full;}];
+                NSLog(@"[YTMDuoFix] v17 expanded exact opaque mini backdrop to %.1fpt",W);
+            }
+            break;
+        }
+    }@finally{gV17SurfaceRepairing=NO;}
+}
+static void (*oldYTMWatchViewLayout)(id,SEL);
+static void ytmV17WatchViewLayout(id self,SEL cmd){
+    if(oldYTMWatchViewLayout)oldYTMWatchViewLayout(self,cmd);
+    ytmV17RepairMiniBackdrop((UIView *)self);
+}
+static NSDictionary *ytmV17BackdropInfo(UIView *mini,UIWindow *w){
+    if(!mini||!w)return @{};
+    UIView *watch=mini.superview.superview;
+    if(![NSStringFromClass(watch.class) isEqualToString:@"YTMWatchView"])
+        return @{};
+    for(UIView *node in watch.subviews){
+        if(objc_getAssociatedObject(node,kV17MiniBackdropKey)){
+            CGRect r=[node convertRect:node.bounds toView:w];
+            return @{@"x":@(r.origin.x),@"y":@(r.origin.y),
+                     @"w":@(r.size.width),@"h":@(r.size.height),
+                     @"repaired":@YES};
+        }
+    }
+    return @{};
+}
+static NSArray *ytmV17AncestorInfo(UIView *node,UIWindow *w){
+    NSMutableArray *out=[NSMutableArray array];
+    for(int n=0;node && node!=w && n<7;node=node.superview,n++){
+        CGRect r=[node convertRect:node.bounds toView:w];
+        [out addObject:@{@"class":NSStringFromClass(node.class),
+          @"x":@(r.origin.x),@"y":@(r.origin.y),
+          @"w":@(r.size.width),@"h":@(r.size.height),
+          @"clips":@(node.clipsToBounds),
+          @"transformY":@(node.transform.ty)}];
+    }
+    return out;
+}
 static NSDictionary *ytmMiniDescendantInfo(UIView *v,UIWindow *w,NSInteger depth){
     CGRect r=[v convertRect:v.bounds toView:w];
     return @{@"type":NSStringFromClass(v.class),
@@ -761,6 +841,7 @@ static void ytmCoverRepairHome(UIWindow *w,YTMDuoViews *views,BOOL home){
         ytmV16FixCoverRows(w);
         ytmCoverMiniReflow(views->mini,views->pivot,w);
         ytmFitCoverMiniContents(views->mini,w);
+        ytmV17RepairMiniBackdrop(views->mini.superview.superview);
     }else{
         ytmRestoreCoverHeaderPair(views->nav);
         ytmRestoreCoverHeaderPair(filters);
@@ -841,11 +922,14 @@ static void ytmSaveCoverGeometry(UIWindow *w,YTMDuoViews *views){
       @"miniHostParent":ytmScreenRect(views->mini.superview.superview,w),
       @"miniSubtree":ytmMiniSnapshot(views->mini,w),
       @"nearMiniOverlays":ytmV16MiniOverlayAudit(w,views->mini),
+      @"miniBackdrop":ytmV17BackdropInfo(views->mini,w),
+      @"navAncestors":ytmV17AncestorInfo(views->nav,w),
+      @"filterAncestors":ytmV17AncestorInfo(filters,w),
       @"navParent":ytmScreenRect(views->nav.superview,w),
       @"filtersParent":ytmScreenRect(filters.superview,w),
       @"pivot":ytmScreenRect(views->pivot,w),
       @"queue":ytmScreenRect(views->queue,w),
-      @"layoutFix":@"v16"
+      @"layoutFix":@"v17"
     };
     NSData *json=[NSJSONSerialization dataWithJSONObject:data
                 options:NSJSONWritingPrettyPrinted error:NULL];
@@ -905,6 +989,12 @@ __attribute__((constructor))static void duoBootstrap(void){
                         @selector(layoutSubviews),
                         (IMP)ytmV16MDCHeaderStackLayout,
                         (IMP *)&oldMDCHeaderStackLayout);
+        // Correction runs after the native YTMWatchView layout as well
+        // as the timer. No other screens or audio layers are modified.
+        swizzleSpecific(NSClassFromString(@"YTMWatchView"),
+                        @selector(layoutSubviews),
+                        (IMP)ytmV17WatchViewLayout,
+                        (IMP *)&oldYTMWatchViewLayout);
         // Preserve the tested "only manual fullscreen" behavior.
         swizzleSpecific(UIWindow.class,@selector(sendEvent:),
                         (IMP)duoWindowSendEvent,(IMP *)&oldWindowEvent);
@@ -929,6 +1019,6 @@ __attribute__((constructor))static void duoBootstrap(void){
             [[NSRunLoop mainRunLoop] addTimer:gLayoutTimer
                                      forMode:NSRunLoopCommonModes];
         });
-        NSLog(@"[YTMDuoFix] v16 cover header real-frame fix and mini-overlay audit; unfolded/audio preserved");
+        NSLog(@"[YTMDuoFix] v17 exact opaque mini backdrop + cover header transforms; unfolded/audio preserved");
     }
 }
