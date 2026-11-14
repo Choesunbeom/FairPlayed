@@ -447,6 +447,7 @@ static void ytmCoverRestoreVertical(UIView *v){
 // but chips y=49. In the screenshot the two rows overlap the feed header.
 // Normalize the two independent rows to the unfolded layout's top anchor.
 // No arbitrary resizing or scaling of the home feed is performed.
+static const void *kCoverOriginalClippingKey=&kCoverOriginalClippingKey;
 static CGAffineTransform ytmStoredBaseTransform(UIView *v){
     if(!v)return CGAffineTransformIdentity;
     NSValue *base=objc_getAssociatedObject(v,kCoverVerticalOriginKey);
@@ -482,13 +483,19 @@ static void ytmAlignCoverHeaderPair(UIView *child,UIWindow *w,
         child.transform=CGAffineTransformTranslate(childBase,0,deltaChild);
     // The transformed child is now INSIDE the transformed container.
     // Its buttons remain tappable at their visible screen positions.
+    if(!objc_getAssociatedObject(parent,kCoverOriginalClippingKey))
+        objc_setAssociatedObject(parent,kCoverOriginalClippingKey,
+                @(parent.clipsToBounds?2:1),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     parent.clipsToBounds=NO;
     parent.layer.masksToBounds=NO;
 }
 static void ytmRestoreCoverHeaderPair(UIView *child){
     if(!child)return;
     ytmCoverRestoreVertical(child);
-    ytmCoverRestoreVertical(child.superview);
+    UIView *parent=child.superview;
+    ytmCoverRestoreVertical(parent);
+    NSNumber *original=objc_getAssociatedObject(parent,kCoverOriginalClippingKey);
+    if(original)parent.clipsToBounds=(original.integerValue==2);
 }
 // Kept for compatibility: only the paired version should be used on cover.
 static void ytmCoverTopReflow(UIView *v,UIWindow *w,CGFloat expectedY,CGFloat threshold){
