@@ -219,13 +219,15 @@ static void fixHeader(UIView *header,UIWindow *w){
     if(notify&&notify!=account)duoShift(notify,-pad);
 }
 
+// UIKit SDK 27.1: UIGlassEffect is created with +effectWithStyle:,
+// NOT -initWithStyle:. A real system material uses alpha == 1.
 static UIVisualEffect *systemGlass(void){
     if(@available(iOS 26.0,*)){
         Class cls=NSClassFromString(@"UIGlassEffect");
-        SEL sel=NSSelectorFromString(@"initWithStyle:");
-        if(cls && [cls instancesRespondToSelector:sel]){
-            id effect=((id (*)(id,SEL,NSInteger))objc_msgSend)([cls alloc],sel,0);
-            if(effect && [effect isKindOfClass:UIVisualEffect.class])return effect;
+        SEL factory=NSSelectorFromString(@"effectWithStyle:");
+        if(cls && [cls respondsToSelector:factory]){
+            id effect=((id(*)(id,SEL,NSInteger))objc_msgSend)(cls,factory,0);
+            if([effect isKindOfClass:UIVisualEffect.class])return effect;
         }
     }
     return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark];
@@ -244,7 +246,7 @@ static UIVisualEffectView *createGlass(UIView *pivot){
     g.clipsToBounds=YES;
     g.layer.cornerRadius=19;
     if(@available(iOS 13.0,*))g.layer.cornerCurve=kCACornerCurveContinuous;
-    g.alpha=0.8;
+    g.alpha=1.0;
     [pivot insertSubview:g atIndex:0];
     return g;
 }
