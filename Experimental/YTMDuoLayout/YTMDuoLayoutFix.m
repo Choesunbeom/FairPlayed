@@ -226,45 +226,94 @@ static void fixHeader(UIView *header,UIWindow *w){
 
 // UIKit SDK 27.1: UIGlassEffect is created with +effectWithStyle:,
 // NOT -initWithStyle:. A real system material uses alpha == 1.
-// Geometry fallback for YTM 9.44, where profile/bell controls may sit
-// in a generic header view instead of YTMNavigationBarView. Select only the
-// TWO rightmost interactive items in the very top row, never the filter chips.
-static void fixHeaderByGeometry(UIView *root, UIWindow *w){
+// Profile is a real YTMAvatarAccountView, often not a UIControl.
+// Restrict scan to app content: system status indicators are not in rootVC.view.
+static void duoHeaderFind(UIView *v,UIWindow *w,
+       NSMutableArray<UIView *> *avatars, NSMutableArray<UIView *> *buttons,
+       NSUInteger *budget,int depth){
+    if(!v || depth>28 || (*budget)++>2500 || !viewVisible(v,w))return;
+    CGRect r=[v convertRect:v.bounds toView:w];
+    if(r.origin.y>112 || CGRectGetMaxY(r)<0)return;
+    NSString *cls=NSStringFromClass(v.class);
+    BOOL small=r.size.width>=16 && r.size.width<105 &&
+               r.size.height>=15 && r.size.height<105 &&
+               CGRectGetMidX(r)>w.bounds.size.width*0.58;
+    if(small && [cls containsString:@"YTMAvatarAccountView"]){
+        [avatars addObject:v];
+    }else if(small){
+        NSString *aid=v.accessibilityIdentifier.lowercaseString?:@"";
+        if([v isKindOfClass:UIControl.class] ||
+            [cls containsString:@"NavigationBarButton"] ||
+            [cls containsString:@"QTMButton"] ||
+            [cls containsString:@"Notification"] ||
+            [aid containsString:@"notification"]) [buttons addObject:v];
+    }
+    for(UIView *child in v.subviews)
+        duoHeaderFind(child,w,avatars,buttons,budget,depth+1);
+}
+static UIView *duoHeaderTapRoot(UIView *v,UIWindow *w){
+    UIView *best=v;
+    CGRect r=[v convertRect:v.bounds toView:w];
+    for(UIView *p=v.superview;p && p!=w;p=p.superview){
+        CGRect q=[p convertRect:p.bounds toView:w];
+        if(q.size.width>116 || q.size.height>108 ||
+           fabs(CGRectGetMidX(q)-CGRectGetMidX(r))>23)break;
+        if(p.userInteractionEnabled &&
+           ([p isKindOfClass:UIControl.class] || p.gestureRecognizers.count))
+            best=p;
+    }
+    return best;
+}
+static void fixHeaderByGeometry(UIView *root,UIWindow *w){
     if(!root||!DuoIsFoldable(w))return;
-    NSMutableArray<UIView *> *buttons=[NSMutableArray array];
-    findButtons(root,buttons,0);
-    CGFloat width=w.bounds.size.width;
-    CGFloat shift=MIN(76,MAX(56,width*0.105));
-    UIView *right=nil,*second=nil;
-    CGFloat rightX=-CGFLOAT_MAX,secondX=-CGFLOAT_MAX;
-    CGFloat rightY=-1;
-    for(UIView *button in buttons) {
-        if(!viewVisible(button,w))continue;
-        CGRect r=[button convertRect:button.bounds toView:w];
-        if(r.size.width<19||r.size.width>85||r.size.height<18||r.size.height>83)
-            continue;
-        CGFloat y=CGRectGetMidY(r);
-        // Bell/avatar are near the system clock; the category chips are
-        // on the second row and must never be moved.
-        if(y<8 || y>MIN(57,w.safeAreaInsets.top+32))continue;
-        NSString *cls=NSStringFromClass(button.class);
-        if([cls containsString:@"StatusBar"]||[cls containsString:@"Battery"]||
-           [cls containsString:@"Wifi"]||[cls containsString:@"Signal"])continue;
-        CGFloat originalX=CGRectGetMidX(r);
-        if(objc_getAssociatedObject(button,kDuoShiftKey))originalX+=shift;
-        if(originalX<width-145 || originalX>width+10)continue;
-        if(originalX>rightX){
-            second=right;secondX=rightX;
-            right=button;rightX=originalX;rightY=y;
-        } else if(originalX>secondX && fabs(originalX-rightX)>19 &&
-                  (rightY<0 || fabs(y-rightY)<24)) {
-            second=button;secondX=originalX;
+    NSMutableArray *avatars=[NSMutableArray array];
+    NSMutableArray *buttons=[NSMutableArray array];
+    NSUInteger budget=0;
+    duoHeaderFind(root,w,avatars,buttons,&budget,0);
+    UIView *avatar=nil;
+    CGFloat x=-CGFLOAT_MAX;
+    for(UIView *v in avatars){
+        CGRect r=[v convertRect:v.bounds toView:w];
+        if(CGRectGetMidX(r)>x && CGRectGetMidX(r)>w.bounds.size.width*0.70){
+            x=CGRectGetMidX(r);avatar=v;
         }
     }
-    if(right)duoShift(right,-shift);
-    if(second && second!=right &&
-       fabs(rightX-secondX)>20 && fabs(rightX-secondX)<125)
-        duoShift(second,-shift);
+    if(!avatar){
+        for(UIView *v in buttons){
+            CGRect r=[v convertRect:v.bounds toView:w];
+            if(CGRectGetMidY(r)>MAX(67,w.safeAreaInsets.top+24))continue;
+            if(CGRectGetMidX(r)>x && CGRectGetMidX(r)>w.bounds.size.width*0.80){
+                x=CGRectGetMidX(r);avatar=v;
+            }
+        }
+    }
+    if(!avatar)return;
+    avatar=duoHeaderTapRoot(avatar,w);
+    CGRect ar=[avatar convertRect:avatar.bounds toView:w];
+    if(CGRectGetMidY(ar)>101)return;
+    CGFloat reserve=MAX(82,w.safeAreaInsets.right+65);
+    CGFloat shift=MIN(132,MAX(67,CGRectGetMaxX(ar)-(w.bounds.size.width-reserve)+6));
+    UIView *bell=nil; CGFloat best=CGFLOAT_MAX;
+    for(UIView *v in buttons){
+        UIView *t=duoHeaderTapRoot(v,w);
+        if(t==avatar || [t isDescendantOfView:avatar] ||
+           [avatar isDescendantOfView:t])continue;
+        CGRect r=[t convertRect:t.bounds toView:w];
+        CGFloat dx=CGRectGetMidX(ar)-CGRectGetMidX(r);
+        if(dx>19 && dx<108 &&
+           fabs(CGRectGetMidY(ar)-CGRectGetMidY(r))<28 && dx<best){
+            bell=t;best=dx;
+        }
+    }
+    duoShift(avatar,-shift);
+    if(bell)duoShift(bell,-shift);
+    static BOOL logged=NO;
+    if(!logged){
+        logged=YES;
+        NSLog(@"[YTMDuoFix] moved header avatar=%@ bell=%@ by %.0fpt",
+              NSStringFromClass(avatar.class),
+              bell?NSStringFromClass(bell.class):@"none",shift);
+    }
 }
 
 static UIVisualEffect *systemGlass(void){
