@@ -203,6 +203,61 @@ static void ytmRestoreHeader(UIView *nav) {
             button.transform=saved.CGAffineTransformValue;
     }
 }
+// v18: The camera cutout obscures the left side of the 'Music' wordmark.
+// Move only small, left-anchored logo/title containers (not the nav root or
+// right controls). The native left-to-right structure is unchanged.
+static const void *kV18LogoBaseTransformKey=&kV18LogoBaseTransformKey;
+static void ytmV18TranslateBrand(UIView *v,CGFloat dx){
+    if(!v)return;
+    NSValue *orig=objc_getAssociatedObject(v,kV18LogoBaseTransformKey);
+    if(!orig){
+        orig=[NSValue valueWithCGAffineTransform:v.transform];
+        objc_setAssociatedObject(v,kV18LogoBaseTransformKey,orig,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    CGAffineTransform base=orig.CGAffineTransformValue;
+    CGAffineTransform desired=CGAffineTransformTranslate(base,dx,0);
+    if(!CGAffineTransformEqualToTransform(v.transform,desired))
+        v.transform=desired;
+}
+static void ytmV18PlaceBrand(UIView *nav,UIWindow *w,BOOL home){
+    if(!nav||!w)return;
+    BOOL active=home && DuoCover(w) && !DuoPortrait(w);
+    // Direct-child groups first, so a combined icon/title group moves once.
+    BOOL moved=NO;
+    for(UIView *v in nav.subviews){
+        NSString *cls=NSStringFromClass(v.class);
+        if([v isKindOfClass:UIControl.class] ||
+           [cls containsString:@"Activity"] ||
+           [cls containsString:@"Button"])continue;
+        CGRect r=[v convertRect:v.bounds toView:nav];
+        if(r.origin.x>-35 && r.origin.x<155 &&
+           r.size.width>=42 && r.size.width<245 &&
+           r.size.height>=24 && r.size.height<=100){
+            ytmV18TranslateBrand(v,active?34.0f:0);
+            moved=YES;
+        }
+    }
+    // Some YTM builds wrap the brand inside a full-width container.
+    // Only run this fallback when the direct nav children expose no logo.
+    if(!moved){
+        for(UIView *container in nav.subviews){
+            if([container isKindOfClass:UIControl.class])continue;
+            if(container.bounds.size.width<nav.bounds.size.width*.72)continue;
+            for(UIView *v in container.subviews){
+                if([v isKindOfClass:UIControl.class])continue;
+                CGRect r=[v convertRect:v.bounds toView:nav];
+                if(r.origin.x>-20 && r.origin.x<145 &&
+                   r.size.width>=42 && r.size.width<245 &&
+                   r.size.height>=24 && r.size.height<=100){
+                    ytmV18TranslateBrand(v,active?34.0f:0);
+                    break;
+                }
+            }
+            if(moved)break;
+        }
+    }
+}
 static void ytmFixHeaderButtons(UIView *nav,UIWindow *w,BOOL home) {
     if(!nav || !w)return;
     UIView *profile=nil,*activity=nil;
@@ -226,11 +281,12 @@ static void ytmFixHeaderButtons(UIView *nav,UIWindow *w,BOOL home) {
     CGFloat offset=0.0f;
     if(home) {
         if(DuoCover(w)) {
-            // Safe right-side clearance is different in cover portrait and
-            // landscape. Move BOTH the button frame and its hit area.
+            // Preserve the already-working cover PORTRAIT offset. Only the
+            // cover landscape changes: align bell/profile at the right edge,
+            // with a small 18pt gutter and native hit rectangles.
             offset=DuoPortrait(w)
                    ? MIN(185.0f,MAX(158.0f,navW*0.34f))
-                   : MIN(275.0f,MAX(235.0f,navW*0.36f));
+                   : 10.0f;
         } else offset=124.0f; // keep unfolded v11 layout unchanged
     }
     CGRect pf=profile.frame, af=activity.frame;
@@ -244,6 +300,7 @@ static void ytmFixHeaderButtons(UIView *nav,UIWindow *w,BOOL home) {
         af.origin.x=activityX;
         activity.frame=af;
     }
+    ytmV18PlaceBrand(nav,w,home);
 }
 // YTMNavigationBarView's own layout frequently resets children AFTER our
 // polling fix. Run the precise adjustment immediately after each native
