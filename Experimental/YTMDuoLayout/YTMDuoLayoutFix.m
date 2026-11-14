@@ -221,7 +221,8 @@ static void ytmFixHeaderButtons(UIView *nav,UIWindow *w,BOOL home) {
     // Apply to BOTH the frames and the native hit rectangles. Previously
     // changing only UIView.transform could be undone by YTM layout.
     // 124pt frees room for the Duo's right-side system-status orb.
-    CGFloat offset=home ? 124.0f : 0.0f;
+    CGFloat offset=home ? (DuoCover(w) ?
+        MIN(250.0f,MAX(185.0f,w.bounds.size.width*0.25f)) : 124.0f) : 0.0f;
     CGRect pf=profile.frame, af=activity.frame;
     CGFloat profileX=navW-48.0f-offset;
     CGFloat activityX=navW-96.0f-offset;
