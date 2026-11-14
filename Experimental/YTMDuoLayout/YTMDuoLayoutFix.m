@@ -160,6 +160,7 @@ typedef struct {
     NSUInteger itemCount;
 } YTMDuoViews;
 
+static void ytmV16FixCoverRows(UIWindow *w);
 static BOOL ytmVisibleInWindow(UIView *v, UIWindow *w) {
     if(!v || v.window!=w)return NO;
     for(UIView *p=v;p;p=p.superview)
@@ -260,6 +261,8 @@ static void ytmNavigationLayout(id self,SEL cmd) {
     ytmFindExactViews(DuoCover(w)?(UIView *)w:root,&views,&budget,0);
     BOOL home=(views.nav==nav && ytmVisibleInWindow(views.pivot,w));
     ytmFixHeaderButtons(nav,w,home);
+    if(home && DuoCover(w) && !DuoPortrait(w))
+        ytmV16FixCoverRows(w);
 }
 static void ytmFixQueueOverlay(UIView *tab,BOOL home,UIView *mini,UIWindow *w) {
     if(!tab)return;
@@ -516,6 +519,72 @@ static void ytmRestoreCoverHeaderPair(UIView *child){
     NSNumber *original=objc_getAssociatedObject(parent,kCoverOriginalClippingKey);
     if(original)parent.clipsToBounds=(original.integerValue==2);
 }
+
+// v16: Post-layout COVER-LANDSCAPE row repair in WINDOW coordinates.
+// v15 diagnostics proved that the filter view was y23, its parent y56,
+// while nav+parent were both y82. These are two separate rows. Moving
+// transforms alone left hit-testing and native layout ambiguous.
+// Set actual container and child frames, with full 56pt hit regions.
+static BOOL gV16RepairingRows=NO;
+static BOOL ytmV16SetScreenY(UIView *v,UIWindow *w,CGFloat y){
+    if(!v || !v.superview || v.superview==w || v.window!=w)return NO;
+    CGRect r=[v convertRect:v.bounds toView:w];
+    CGFloat delta=y-r.origin.y;
+    if(!isfinite(delta)||fabs(delta)>250)return NO;
+    if(fabs(delta)>0.7){
+        CGRect f=v.frame;
+        f.origin.y+=delta;
+        v.frame=f;
+    }
+    return YES;
+}
+static void ytmV16AlignPair(UIView *child,UIWindow *w,CGFloat targetY){
+    if(!child||!child.superview||!w)return;
+    UIView *parent=child.superview;
+    if(parent==w || parent.window!=w)return;
+    CGRect p=[parent convertRect:parent.bounds toView:w];
+    if(p.size.width<w.bounds.size.width*.80 || p.size.height<18 ||
+       p.size.height>130)return;
+    // First put parent into the correct vertical slot, then put the
+    // content inside it. Widen the 23pt invisible hit area to fit 56pt.
+    if(!ytmV16SetScreenY(parent,w,targetY))return;
+    if(parent.bounds.size.height<56){
+        CGRect frame=parent.frame;
+        frame.size.height=56;
+        parent.frame=frame;
+    }
+    ytmV16SetScreenY(child,w,targetY);
+    parent.clipsToBounds=NO;
+    parent.layer.masksToBounds=NO;
+}
+static void ytmV16FixCoverRows(UIWindow *w){
+    if(gV16RepairingRows || !w || !DuoCover(w) || DuoPortrait(w))return;
+    UIView *root=w.rootViewController.viewIfLoaded;
+    if(!root)return;
+    YTMDuoViews v={0};
+    NSUInteger budget=0;
+    ytmFindExactViews((UIView*)w,&v,&budget,0);
+    if(!ytmVisibleInWindow(v.pivot,w))return;
+    UIView *filters=ytmFindViewByClass(w,@"GOONavigationBar",0);
+    if(!v.nav || !filters || !ytmVisibleInWindow(v.nav,w) ||
+       !ytmVisibleInWindow(filters,w))return;
+    gV16RepairingRows=YES;
+    @try{
+        [UIView performWithoutAnimation:^{
+            ytmV16AlignPair(v.nav,w,2);
+            ytmV16AlignPair(filters,w,58);
+        }];
+    }@finally{
+        gV16RepairingRows=NO;
+    }
+}
+static void (*oldMDCHeaderStackLayout)(id,SEL);
+static void ytmV16MDCHeaderStackLayout(id self,SEL cmd){
+    if(oldMDCHeaderStackLayout)oldMDCHeaderStackLayout(self,cmd);
+    UIView *view=(UIView*)self;
+    UIWindow *w=view.window;
+    if(DuoCover(w)&&!DuoPortrait(w))ytmV16FixCoverRows(w);
+}
 static void ytmCoverMiniReflow(UIView *mini,UIView *pivot,UIWindow *w){
     if(!mini||!pivot||!w||!DuoCover(w)||DuoPortrait(w))return;
     CGRect tab=[pivot convertRect:pivot.bounds toView:w];
@@ -670,8 +739,9 @@ static void ytmCoverRepairHome(UIWindow *w,YTMDuoViews *views,BOOL home){
         // The cover-landscape screenshot showed header chips around y=180
         // and the Music logo below them. Only correct genuinely displaced
         // header rows; their native x positions and interactions stay intact.
-        ytmAlignCoverHeaderPair(views->nav,w,0,2);
-        ytmAlignCoverHeaderPair(filters,w,56,58);
+        // v16 moves the actual two row containers/children into
+        // non-overlapping 56pt hit regions; no transform-based oscillation.
+        ytmV16FixCoverRows(w);
         ytmCoverMiniReflow(views->mini,views->pivot,w);
         ytmFitCoverMiniContents(views->mini,w);
     }else{
@@ -761,6 +831,12 @@ __attribute__((constructor))static void duoBootstrap(void){
                         @selector(layoutSubviews),
                         (IMP)ytmMiniplayerLayout,
                         (IMP *)&oldYTMMiniplayerLayout);
+        // The navigation and category rows can be relaid out separately:
+        // correct after either native layout, plus the periodic fallback.
+        swizzleSpecific(NSClassFromString(@"MDCHeaderStackView"),
+                        @selector(layoutSubviews),
+                        (IMP)ytmV16MDCHeaderStackLayout,
+                        (IMP *)&oldMDCHeaderStackLayout);
         // Preserve the tested "only manual fullscreen" behavior.
         swizzleSpecific(UIWindow.class,@selector(sendEvent:),
                         (IMP)duoWindowSendEvent,(IMP *)&oldWindowEvent);
