@@ -448,59 +448,69 @@ static void ytmCoverRestoreVertical(UIView *v){
 // Normalize the two independent rows to the unfolded layout's top anchor.
 // No arbitrary resizing or scaling of the home feed is performed.
 static const void *kCoverOriginalClippingKey=&kCoverOriginalClippingKey;
+// In v14, the 140pt correction cap silently rejected the actual 164pt
+// displaced navigation parent reported by the cover landscape diagnostics.
+// More importantly, repeatedly restoring/recorrecting transforms during the
+// 0.45s timer could make the header appear to bounce between two positions.
+// This v15 implementation computes an ABSOLUTE transform from the current
+// UIKit geometry, accounting for our LAST applied offset, without ever
+// temporarily resetting the visible transform.
+static const void *kV15AppliedYKey=&kV15AppliedYKey;
 static CGAffineTransform ytmStoredBaseTransform(UIView *v){
     if(!v)return CGAffineTransformIdentity;
-    NSValue *base=objc_getAssociatedObject(v,kCoverVerticalOriginKey);
-    if(!base){
-        base=[NSValue valueWithCGAffineTransform:v.transform];
-        objc_setAssociatedObject(v,kCoverVerticalOriginKey,base,
+    NSValue *saved=objc_getAssociatedObject(v,kCoverVerticalOriginKey);
+    if(!saved){
+        saved=[NSValue valueWithCGAffineTransform:v.transform];
+        objc_setAssociatedObject(v,kCoverVerticalOriginKey,saved,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    return base.CGAffineTransformValue;
+    return saved.CGAffineTransformValue;
 }
-// Correct the CONTAINER and the child as one unit. v13 translated just the
-// YTMNavigationBarView child from its parent y82 down to y2, leaving it
-// outside its parent's touch and clipping bounds. Likewise filter y58 was
-// outside the MDCHeaderStackView at y82. Moving the parents fixes BOTH
-// rendering and hit testing without shifting the feed or navigation tabs.
+static BOOL ytmPlaceAtWindowY(UIView *v,UIWindow *w,CGFloat desired){
+    if(!v||!w||v.window!=w)return NO;
+    CGAffineTransform base=ytmStoredBaseTransform(v);
+    CGFloat prior=[objc_getAssociatedObject(v,kV15AppliedYKey) doubleValue];
+    CGRect current=[v convertRect:v.bounds toView:w];
+    if(CGRectIsNull(current)||CGRectIsInfinite(current) ||
+       current.size.width<25)return NO;
+    // 'current' already includes the last transform. Removing only OUR
+    // offset recovers UIKit's most recent layout result, even if UIKit
+    // adjusted the native frame in the meantime.
+    CGFloat nativeY=current.origin.y-prior;
+    CGFloat delta=desired-nativeY;
+    if(!isfinite(delta)||fabs(delta)>270)return NO;
+    CGAffineTransform updated=CGAffineTransformTranslate(base,0,delta);
+    if(!CGAffineTransformEqualToTransform(v.transform,updated))
+        v.transform=updated;
+    objc_setAssociatedObject(v,kV15AppliedYKey,@(delta),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return YES;
+}
 static void ytmAlignCoverHeaderPair(UIView *child,UIWindow *w,
-                                     CGFloat parentY,CGFloat childY){
+                                    CGFloat parentY,CGFloat childY){
     if(!child||!child.superview||!w||!DuoCover(w)||DuoPortrait(w))return;
     UIView *parent=child.superview;
-    if(parent==w || parent.bounds.size.width<w.bounds.size.width*.84f)return;
-    CGAffineTransform parentBase=ytmStoredBaseTransform(parent);
-    CGAffineTransform childBase=ytmStoredBaseTransform(child);
-    parent.transform=parentBase;
-    child.transform=childBase;
-    CGRect parentRect=[parent convertRect:parent.bounds toView:w];
-    if(parentRect.size.height<18||parentRect.size.height>150)return;
-    CGFloat deltaParent=parentY-parentRect.origin.y;
-    if(fabs(deltaParent)>140)return;
-    if(fabs(deltaParent)>1)parent.transform=CGAffineTransformTranslate(parentBase,0,deltaParent);
-    CGRect childRect=[child convertRect:child.bounds toView:w];
-    CGFloat deltaChild=childY-childRect.origin.y;
-    if(fabs(deltaChild)<140 && fabs(deltaChild)>1)
-        child.transform=CGAffineTransformTranslate(childBase,0,deltaChild);
-    // The transformed child is now INSIDE the transformed container.
-    // Its buttons remain tappable at their visible screen positions.
+    if(parent==w||parent.bounds.size.width<w.bounds.size.width*.84f)return;
+    CGRect p=[parent convertRect:parent.bounds toView:w];
+    if(p.size.height<18||p.size.height>150)return;
+    // Parent first, then child (in the parent's NEW coordinate system).
+    if(!ytmPlaceAtWindowY(parent,w,parentY))return;
+    ytmPlaceAtWindowY(child,w,childY);
     if(!objc_getAssociatedObject(parent,kCoverOriginalClippingKey))
         objc_setAssociatedObject(parent,kCoverOriginalClippingKey,
-                @(parent.clipsToBounds?2:1),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                 @(parent.clipsToBounds?2:1),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     parent.clipsToBounds=NO;
     parent.layer.masksToBounds=NO;
 }
 static void ytmRestoreCoverHeaderPair(UIView *child){
     if(!child)return;
-    ytmCoverRestoreVertical(child);
     UIView *parent=child.superview;
+    ytmCoverRestoreVertical(child);
     ytmCoverRestoreVertical(parent);
+    objc_setAssociatedObject(child,kV15AppliedYKey,nil,OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(parent,kV15AppliedYKey,nil,OBJC_ASSOCIATION_ASSIGN);
     NSNumber *original=objc_getAssociatedObject(parent,kCoverOriginalClippingKey);
     if(original)parent.clipsToBounds=(original.integerValue==2);
-}
-// Kept for compatibility: only the paired version should be used on cover.
-static void ytmCoverTopReflow(UIView *v,UIWindow *w,CGFloat expectedY,CGFloat threshold){
-    (void)threshold;
-    ytmAlignCoverHeaderPair(v,w,expectedY,expectedY);
 }
 static void ytmCoverMiniReflow(UIView *mini,UIView *pivot,UIWindow *w){
     if(!mini||!pivot||!w||!DuoCover(w)||DuoPortrait(w))return;
