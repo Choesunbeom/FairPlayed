@@ -127,184 +127,226 @@ static void swizzleSpecific(Class cls,SEL sel,IMP newImp,IMP *oldImp) {
     NSLog(@"[YTMDuoFix] hooked %@ %@",NSStringFromClass(cls),NSStringFromSelector(sel));
 }
 
-// V8 intentionally uses actual UIWindow point geometry, not screenshot
-// pixel values or brittle private player-class names.
-// Home controls are discovered directly; no dependency on a pivot class.
-//
-// Original audio module and the successful fullscreen guard above untouched.
-static const void *kDuoV8OriginalTransform=&kDuoV8OriginalTransform;
-static const void *kDuoV8AppliedOffset=&kDuoV8AppliedOffset;
-static const void *kDuoV8Glass=&kDuoV8Glass;
-static const void *kDuoV8GlassEffect=&kDuoV8GlassEffect;
-static const void *kDuoV8GlassIndicator=&kDuoV8GlassIndicator;
 
+// v10 - exact view types and frames verified from the Duo's portrait and
+// landscape JSON diagnostics (669x951 / 951x669, 82pt top safe area).
+// The portrait YTMMiniPlayerView was ALREADY a correct 64pt strip.
+// The oversized overlapping view was its YTMWatchView sibling,
+// YTMPlayerTabView (y=678, height=805). Never resize the native miniplayer.
 
-// Safe recovery v9: no layout resizing, no extra overlay above the five
-// native tab controls and no guessing at avatar positions. Retains the
-// successful manual fullscreen guard from the earlier module.
-//
-// This diagnostic records only view class, geometry and structural metadata.
-// It does NOT read titles, music, account details or private content.
-static NSUInteger gDuoSnapshotCount = 0;
-static NSUInteger gDuoLastWindowWidth=0, gDuoLastWindowHeight=0;
-static NSUInteger gDuoSnapshotIndex=0;
+static const void *kHeaderOriginalTransformKey = &kHeaderOriginalTransformKey;
+static const void *kQueueHiddenByUsKey = &kQueueHiddenByUsKey;
+static const void *kGlassDockKey = &kGlassDockKey;
+static const void *kGlassContainerKey = &kGlassContainerKey;
+static const void *kGlassHairlineKey = &kGlassHairlineKey;
 
-static BOOL duoContains(NSString *s,NSString *needle) {
-    return [s rangeOfString:needle options:NSCaseInsensitiveSearch].location!=NSNotFound;
+typedef struct {
+    __unsafe_unretained UIView *nav;
+    __unsafe_unretained UIView *mini;
+    __unsafe_unretained UIView *queue;
+    __unsafe_unretained UIView *pivot;
+    __unsafe_unretained UIView *items[6];
+    NSUInteger itemCount;
+} YTMDuoViews;
+
+static BOOL ytmVisibleInWindow(UIView *v, UIWindow *w) {
+    if(!v || v.window!=w)return NO;
+    for(UIView *p=v;p;p=p.superview)
+        if(p.hidden || p.alpha<0.05f)return NO;
+    CGRect rect=[v convertRect:v.bounds toView:w];
+    return rect.size.width>12 && rect.size.height>12 &&
+           CGRectIntersectsRect(rect,w.bounds);
 }
-static CGRect duoFrameInWindow(UIView *view,UIWindow *window) {
-    if(!view || !window || view.window!=window)return CGRectNull;
-    return [view convertRect:view.bounds toView:window];
+static void ytmFindExactViews(UIView *v,YTMDuoViews *out,
+                              NSUInteger *budget,int depth) {
+    if(!v || depth>32 || (*budget)++>10000)return;
+    NSString *cls=NSStringFromClass(v.class);
+    if([cls isEqualToString:@"YTMNavigationBarView"])out->nav=v;
+    else if([cls isEqualToString:@"YTMMiniPlayerView"])out->mini=v;
+    else if([cls isEqualToString:@"YTMPlayerTabView"])out->queue=v;
+    else if([cls isEqualToString:@"YTPivotBarView"])out->pivot=v;
+    else if([cls isEqualToString:@"YTPivotBarItemView"] &&
+            out->itemCount<6)out->items[out->itemCount++]=v;
+    for(UIView *child in v.subviews)
+        ytmFindExactViews(child,out,budget,depth+1);
 }
-static NSDictionary *duoRectDict(CGRect rect) {
-    if(CGRectIsNull(rect) || CGRectIsInfinite(rect))return @{@"invalid":@YES};
-    return @{@"x":@(round(rect.origin.x*10)/10.0),
-             @"y":@(round(rect.origin.y*10)/10.0),
-             @"w":@(round(rect.size.width*10)/10.0),
-             @"h":@(round(rect.size.height*10)/10.0)};
-}
-static BOOL duoVisible(UIView *view) {
-    for(UIView *p=view;p;p=p.superview)if(p.hidden||p.alpha<0.05)return NO;
-    return YES;
-}
-static BOOL duoIsTarget(UIView *view,UIWindow *w,CGRect r){
-    NSString *cls=NSStringFromClass(view.class);
-    BOOL keyclass=duoContains(cls,@"Pivot") ||
-                  duoContains(cls,@"Miniplayer") ||
-                  duoContains(cls,@"MiniPlayer") ||
-                  duoContains(cls,@"Avatar") ||
-                  duoContains(cls,@"NavigationBar") ||
-                  duoContains(cls,@"Notification") ||
-                  duoContains(cls,@"Queue") ||
-                  duoContains(cls,@"WatchView") ||
-                  duoContains(cls,@"YTMPlayer");
-    if(keyclass)return YES;
-    if(CGRectIsNull(r))return NO;
-    CGFloat width=w.bounds.size.width,height=w.bounds.size.height;
-    BOOL inHeader=r.origin.y>=-50 && CGRectGetMidY(r)<110 &&
-                  CGRectGetMidX(r)>width*0.62;
-    BOOL inBottom=r.origin.y>height-240 && r.size.width>width*.72 &&
-                  r.size.height>32 && r.size.height<260;
-    BOOL isControl=[view isKindOfClass:UIControl.class] ||
-                   duoContains(cls,@"Button");
-    if(inHeader && isControl)return YES;
-    if(inBottom && (r.size.height>56 || isControl))return YES;
-    if([view isKindOfClass:UILabel.class]){
-        NSString *value=((UILabel*)view).text?:@"";
-        // Detect only the known queue heading. Do not save the text itself.
-        if([value containsString:@"현재 재생목록"] ||
-           [value localizedCaseInsensitiveContainsString:@"current queue"] ||
-           [value localizedCaseInsensitiveContainsString:@"current playlist"])
-           return YES;
+static void ytmSetHeaderTranslation(UIView *button, CGFloat dx) {
+    if(!button)return;
+    NSValue *saved=objc_getAssociatedObject(button,kHeaderOriginalTransformKey);
+    if(!saved){
+        saved=[NSValue valueWithCGAffineTransform:button.transform];
+        objc_setAssociatedObject(button,kHeaderOriginalTransformKey,saved,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    return NO;
+    CGAffineTransform base=saved.CGAffineTransformValue;
+    CGAffineTransform updated=CGAffineTransformTranslate(base,dx,0);
+    if(!CGAffineTransformEqualToTransform(button.transform,updated))
+        button.transform=updated;
 }
-static void duoWalk(UIView *view,UIWindow *w,NSString *parent,
-                    NSMutableArray<NSDictionary *> *items,
-                    NSUInteger *budget,int depth){
-    if(!view || depth>38 || (*budget)++>16000 || items.count>=350)return;
-    NSString *cls=NSStringFromClass(view.class);
-    CGRect r=duoFrameInWindow(view,w);
-    if(duoIsTarget(view,w,r)){
-        BOOL isQueueTitle=NO;
-        if([view isKindOfClass:UILabel.class]){
-            NSString *value=((UILabel*)view).text?:@"";
-            isQueueTitle=[value containsString:@"현재 재생목록"] ||
-                [value localizedCaseInsensitiveContainsString:@"current queue"] ||
-                [value localizedCaseInsensitiveContainsString:@"current playlist"];
+static void ytmRestoreHeader(UIView *nav) {
+    for(UIView *button in nav.subviews){
+        NSValue *saved=objc_getAssociatedObject(button,kHeaderOriginalTransformKey);
+        if(saved && !CGAffineTransformEqualToTransform(
+                        button.transform,saved.CGAffineTransformValue))
+            button.transform=saved.CGAffineTransformValue;
+    }
+}
+static void ytmFixHeaderButtons(UIView *nav,UIWindow *w,BOOL home) {
+    if(!nav)return;
+    if(!home){ytmRestoreHeader(nav);return;}
+    UIView *profile=nil,*activity=nil;
+    // These are the actual immediate children from BOTH diagnostics:
+    // portrait QTMButton x621, YTMNavbarActivityButton x573;
+    // landscape QTMButton x903, activity x855.
+    for(UIView *child in nav.subviews){
+        NSString *name=NSStringFromClass(child.class);
+        if([name isEqualToString:@"QTMButton"])profile=child;
+        else if([name isEqualToString:@"YTMNavbarActivityButton"])
+            activity=child;
+    }
+    if(!profile || !activity)return;
+    CGRect r=[profile convertRect:profile.bounds toView:w];
+    if(r.size.width<25 || r.size.width>65)return;
+    // Native nav is laid out at y2 despite a top safe area of 82pt.
+    // Reserve 146pt at the right for the Duo status overlay.
+    // Compute from the base layout (profile right edge was w-8pt).
+    CGFloat dx=-140.0f;
+    ytmSetHeaderTranslation(profile,dx);
+    ytmSetHeaderTranslation(activity,dx);
+}
+static void ytmFixQueueOverlay(UIView *tab,BOOL home,UIView *mini,UIWindow *w) {
+    if(!tab)return;
+    NSNumber *patched=objc_getAssociatedObject(tab,kQueueHiddenByUsKey);
+    if(!home || !ytmVisibleInWindow(mini,w)) {
+        if(patched.boolValue){
+            tab.hidden=NO;
+            objc_setAssociatedObject(tab,kQueueHiddenByUsKey,nil,
+                                     OBJC_ASSOCIATION_ASSIGN);
         }
-        [items addObject:@{
-           @"class":cls,
-           @"parent":parent?:@"",
-           @"frame":duoRectDict(r),
-           @"hidden":@(view.hidden),
-           @"visible":@(duoVisible(view)),
-           @"alpha":@(round(view.alpha*100)/100.0),
-           @"interactive":@(view.userInteractionEnabled),
-           @"sublayers":@(view.layer.sublayers.count),
-           @"children":@(view.subviews.count),
-           @"queueHeading":@(isQueueTitle),
-           @"depth":@(depth)
-        }];
+        return;
     }
-    for(UIView *child in view.subviews){
-        if(items.count>=350||*budget>16000)break;
-        duoWalk(child,w,cls,items,budget,depth+1);
-    }
-}
-static void duoWriteDiagnostics(void){
-    UIApplication *app=UIApplication.sharedApplication;
-    if(app.applicationState!=UIApplicationStateActive)return;
-    NSMutableArray<NSDictionary *> *views=[NSMutableArray array];
-    NSMutableArray<NSDictionary *> *windows=[NSMutableArray array];
-    NSUInteger budget=0;
-    for(UIWindow *w in app.windows){
-        if(w.hidden || !w.rootViewController ||
-           w.windowLevel!=UIWindowLevelNormal)continue;
-        CGSize sz=w.bounds.size;
-        if(sz.width<300||sz.height<300)continue;
-        UIEdgeInsets inset=w.safeAreaInsets;
-        [windows addObject:@{
-          @"bounds":duoRectDict(w.bounds),
-          @"safeArea":@{@"top":@(inset.top),@"left":@(inset.left),
-                         @"right":@(inset.right),@"bottom":@(inset.bottom)},
-          @"rootClass":NSStringFromClass(w.rootViewController.class),
-          @"windowLevel":@(w.windowLevel)
-        }];
-        // Include window-level siblings. Navigation may not be in root.view.
-        for(UIView *child in w.subviews)
-            duoWalk(child,w,NSStringFromClass(w.class),views,&budget,0);
-    }
-    if(windows.count==0)return;
-    NSUInteger portraitCount=0,landscapeCount=0,queueTitles=0;
-    for(NSDictionary *window in windows){
-        NSDictionary *rect=window[@"bounds"];
-        if([rect[@"h"]doubleValue]>[rect[@"w"]doubleValue])portraitCount++;
-        else landscapeCount++;
-    }
-    for(NSDictionary *view in views)if([view[@"queueHeading"]boolValue])queueTitles++;
-    NSDictionary *record=@{
-      @"purpose":@"YTM Duo 9.44.2 structural layout diagnostics",
-      @"privacy":@"No song/account titles or user identifiers included",
-      @"capturedAt":[[NSDate date]description],
-      @"snapshot":@(++gDuoSnapshotIndex),
-      @"windows":windows,
-      @"views":views,
-      @"matchedQueueHeadings":@(queueTitles),
-      @"portraitWindows":@(portraitCount),
-      @"landscapeWindows":@(landscapeCount),
-      @"visitedViews":@(budget)
-    };
-    NSError *jsonError=nil;
-    NSData *json=[NSJSONSerialization dataWithJSONObject:record
-                     options:NSJSONWritingPrettyPrinted error:&jsonError];
-    if(!json)return;
-    NSURL *docs=[[NSFileManager defaultManager]
-                 URLsForDirectory:NSDocumentDirectory
-                 inDomains:NSUserDomainMask].firstObject;
-    if(!docs)return;
-    // Save one file per orientation, plus a latest snapshot. Accessible in
-    // Files > On My iPhone > YouTube Music when UIFileSharingEnabled is true.
-    NSString *filename=portraitCount>landscapeCount
-       ? @"YTMDuo_portrait_layout.json" : @"YTMDuo_landscape_layout.json";
-    [json writeToURL:[docs URLByAppendingPathComponent:filename] atomically:YES];
-    [json writeToURL:[docs URLByAppendingPathComponent:@"YTMDuo_latest_layout.json"]
-            atomically:YES];
-    static BOOL notified=NO;
-    if(!notified){
-        NSLog(@"[YTMDuoFix] v9 safely restored; layout snapshots in Documents");
-        notified=YES;
+    CGRect r=[tab convertRect:tab.bounds toView:w];
+    CGRect m=[mini convertRect:mini.bounds toView:w];
+    // Restrict to the exact bad state in the supplied portrait log:
+    // YTMPlayerTabView y678 height805 covers the real 64pt mini at y805.
+    BOOL oversizedPortrait=DuoPortrait(w) &&
+        r.size.width>w.bounds.size.width*0.94 &&
+        r.size.height>w.bounds.size.height*0.55 &&
+        r.origin.y>w.bounds.size.height*0.5 &&
+        r.origin.y<w.bounds.size.height*0.85 &&
+        m.size.height>=50 && m.size.height<=80 &&
+        m.origin.y>w.bounds.size.height*.70;
+    if(oversizedPortrait && !tab.hidden){
+        tab.hidden=YES; // do NOT modify native mini or home layout constraints
+        objc_setAssociatedObject(tab,kQueueHiddenByUsKey,@YES,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        NSLog(@"[YTMDuoFix] hidden oversized portrait YTMPlayerTabView while home mini visible");
     }
 }
-static void duoV9SnapshotTimer(NSTimer *timer){
+static UIVisualEffect *ytmGlassMaterial(void){
+    if(@available(iOS 26.0,*)){
+        Class cls=NSClassFromString(@"UIGlassEffect");
+        SEL sel=NSSelectorFromString(@"effectWithStyle:");
+        if(cls && [cls respondsToSelector:sel]){
+            id effect=((id(*)(id,SEL,NSInteger))objc_msgSend)(cls,sel,0);
+            if([effect isKindOfClass:UIVisualEffect.class])return effect;
+        }
+    }
+    return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark];
+}
+static UIView *ytmTabItemContainer(YTMDuoViews *views,UIView *pivot){
+    // All five actual tab views share a single UIView parent (JSON depth 5).
+    UIView *container=views->itemCount?views->items[0].superview:nil;
+    if(!container || ![container isDescendantOfView:pivot])return nil;
+    NSUInteger count=0;
+    for(NSUInteger i=0;i<views->itemCount;i++){
+        UIView *v=views->items[i];
+        if(!v.hidden && v.superview==container && v.bounds.size.width>30)
+            count++;
+    }
+    return count==5?container:nil;
+}
+static void ytmFixGlassDock(YTMDuoViews *views,UIWindow *w,BOOL home){
+    UIView *pivot=views->pivot;
+    if(!pivot)return;
+    UIVisualEffectView *glass=objc_getAssociatedObject(pivot,kGlassDockKey);
+    UIView *container=objc_getAssociatedObject(pivot,kGlassContainerKey);
+    if(!home || !ytmVisibleInWindow(pivot,w)){
+        if(glass)glass.hidden=YES;
+        return;
+    }
+    UIView *target=ytmTabItemContainer(views,pivot);
+    if(!target)return;
+    if(!glass || container!=target){
+        [glass removeFromSuperview];
+        glass=[[UIVisualEffectView alloc]initWithEffect:ytmGlassMaterial()];
+        glass.userInteractionEnabled=NO; // preserve all tab actions/gestures
+        glass.clipsToBounds=YES;
+        glass.layer.cornerCurve=kCACornerCurveContinuous;
+        glass.layer.borderWidth=0.75f;
+        glass.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:0.20f].CGColor;
+        [target insertSubview:glass atIndex:0]; // below the five native icons
+        objc_setAssociatedObject(pivot,kGlassDockKey,glass,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(pivot,kGlassContainerKey,target,
+                                 OBJC_ASSOCIATION_ASSIGN);
+        CALayer *line=[CALayer layer];
+        line.backgroundColor=[UIColor.whiteColor colorWithAlphaComponent:0.19f].CGColor;
+        [glass.layer addSublayer:line];
+        objc_setAssociatedObject(pivot,kGlassHairlineKey,line,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    CGFloat minX=CGFLOAT_MAX,maxX=-CGFLOAT_MAX;
+    CGFloat minY=CGFLOAT_MAX,maxY=-CGFLOAT_MAX;
+    for(NSUInteger i=0;i<views->itemCount;i++){
+        UIView *tab=views->items[i];
+        if(tab.hidden || tab.superview!=target || tab.bounds.size.width<30)continue;
+        CGRect r=[tab convertRect:tab.bounds toView:target];
+        minX=MIN(minX,CGRectGetMinX(r)); maxX=MAX(maxX,CGRectGetMaxX(r));
+        minY=MIN(minY,CGRectGetMinY(r)); maxY=MAX(maxY,CGRectGetMaxY(r));
+    }
+    if(minX==CGFLOAT_MAX)return;
+    // One slim contiguous dock, no huge individual capsules and no separate
+    // UIWindow overlay. Position is derived from the five real tabs.
+    CGRect frame=CGRectMake(minX+8,minY-3,
+                            MAX(60,maxX-minX-16),
+                            MIN(60,MAX(46,maxY-minY+11)));
+    glass.frame=frame;
+    glass.layer.cornerRadius=frame.size.height/2;
+    CALayer *line=objc_getAssociatedObject(pivot,kGlassHairlineKey);
+    line.frame=CGRectMake(18,0.7,MAX(0,frame.size.width-36),0.6);
+    glass.hidden=NO;
+    [target sendSubviewToBack:glass];
+}
+static void duoV10Tick(NSTimer *timer){
     (void)timer;
-    duoWriteDiagnostics();
+    if(gDuoTickInProgress)return;
+    gDuoTickInProgress=YES;
+    @try{
+        for(UIWindow *w in UIApplication.sharedApplication.windows){
+            if(!DuoIsFoldable(w)||w.hidden ||
+               w.windowLevel!=UIWindowLevelNormal)continue;
+            UIView *root=w.rootViewController.viewIfLoaded;
+            if(!root)continue;
+            YTMDuoViews views={0};
+            NSUInteger budget=0;
+            ytmFindExactViews(root,&views,&budget,0);
+            // Genuine home screen = visible YTPivotBarView at the bottom.
+            BOOL home=ytmVisibleInWindow(views.pivot,w);
+            ytmFixHeaderButtons(views.nav,w,home);
+            ytmFixQueueOverlay(views.queue,home,views.mini,w);
+            ytmFixGlassDock(&views,w,home);
+        }
+    }@catch(NSException *e){
+        NSLog(@"[YTMDuoFix] v10 nonfatal layout exception %@",e.reason);
+    }
+    gDuoTickInProgress=NO;
 }
 __attribute__((constructor))static void duoBootstrap(void){
     @autoreleasepool{
         if(![NSBundle.mainBundle.bundleIdentifier
              isEqualToString:@"com.google.ios.youtubemusic"])return;
-        // This part fixed automatic fullscreen in prior tested builds.
+        // Preserve the tested "only manual fullscreen" behavior.
         swizzleSpecific(UIWindow.class,@selector(sendEvent:),
                         (IMP)duoWindowSendEvent,(IMP *)&oldWindowEvent);
         swizzleSpecific(UIApplication.class,
@@ -323,11 +365,11 @@ __attribute__((constructor))static void duoBootstrap(void){
                         @selector(toggleFullscreen),
                         (IMP)duoPlayerToggle,(IMP *)&oldPlayerToggle);
         dispatch_async(dispatch_get_main_queue(),^{
-            gLayoutTimer=[NSTimer scheduledTimerWithTimeInterval:4.0
-                     repeats:YES block:^(NSTimer *t){duoV9SnapshotTimer(t);}];
+            gLayoutTimer=[NSTimer scheduledTimerWithTimeInterval:0.45
+                repeats:YES block:^(NSTimer *t){duoV10Tick(t);}];
             [[NSRunLoop mainRunLoop] addTimer:gLayoutTimer
-                                 forMode:NSRunLoopCommonModes];
+                                     forMode:NSRunLoopCommonModes];
         });
-        NSLog(@"[YTMDuoFix] v9 safe rollback, no layout/volume hooks");
+        NSLog(@"[YTMDuoFix] v10 exact-view 669x951 / 951x669 targeted patch loaded");
     }
 }
