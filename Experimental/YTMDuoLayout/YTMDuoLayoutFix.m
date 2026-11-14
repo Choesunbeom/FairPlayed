@@ -217,12 +217,21 @@ static void ytmFixHeaderButtons(UIView *nav,UIWindow *w,BOOL home) {
     }
     if(!profile||!activity)return;
     CGFloat navW=nav.bounds.size.width;
-    if(navW<550 || navW>1200)return;
+    // Cover portrait is 466pt wide: v12's 550pt minimum silently skipped it.
+    if(navW<400 || navW>1200)return;
     // Apply to BOTH the frames and the native hit rectangles. Previously
     // changing only UIView.transform could be undone by YTM layout.
     // 124pt frees room for the Duo's right-side system-status orb.
-    CGFloat offset=home ? (DuoCover(w) ?
-        MIN(250.0f,MAX(185.0f,w.bounds.size.width*0.25f)) : 124.0f) : 0.0f;
+    CGFloat offset=0.0f;
+    if(home) {
+        if(DuoCover(w)) {
+            // Safe right-side clearance is different in cover portrait and
+            // landscape. Move BOTH the button frame and its hit area.
+            offset=DuoPortrait(w)
+                   ? MIN(185.0f,MAX(158.0f,navW*0.34f))
+                   : MIN(275.0f,MAX(235.0f,navW*0.36f));
+        } else offset=124.0f; // keep unfolded v11 layout unchanged
+    }
     CGRect pf=profile.frame, af=activity.frame;
     CGFloat profileX=navW-48.0f-offset;
     CGFloat activityX=navW-96.0f-offset;
@@ -248,7 +257,7 @@ static void ytmNavigationLayout(id self,SEL cmd) {
     if(!root)return;
     YTMDuoViews views={0};
     NSUInteger budget=0;
-    ytmFindExactViews(root,&views,&budget,0);
+    ytmFindExactViews(DuoCover(w)?(UIView *)w:root,&views,&budget,0);
     BOOL home=(views.nav==nav && ytmVisibleInWindow(views.pivot,w));
     ytmFixHeaderButtons(nav,w,home);
 }
