@@ -757,6 +757,56 @@ static NSDictionary *ytmScreenRect(UIView *v,UIWindow *w){
              @"w":@(r.size.width),@"h":@(r.size.height),
              @"hidden":@(v.hidden)};
 }
+// Identify any ADDITIONAL centered presentation at the mini player's
+// y=320pt. The user screenshot contains a ~440pt overlay although the
+// actual YTMMiniPlayerView and its 582pt collection now span the window.
+// Class + frames + background alpha only; never titles or account data.
+static void ytmV16AuditMiniOverlayWalk(UIView *node,UIWindow *w,
+                CGRect miniFrame,NSMutableArray *results,
+                NSUInteger *budget,int depth){
+    if(!node||depth>32||(*budget)++>14000||results.count>=100)return;
+    if(node.window==w && !node.hidden && node.alpha>0.06f){
+        CGRect r=[node convertRect:node.bounds toView:w];
+        BOOL nearVertical=CGRectGetMinY(r)<CGRectGetMaxY(miniFrame)+25 &&
+                          CGRectGetMaxY(r)>CGRectGetMinY(miniFrame)-16;
+        BOOL panelLike=r.size.width>180 &&
+              r.size.width<w.bounds.size.width*.98f &&
+              r.size.height>35 && r.size.height<150;
+        BOOL narrowCenter=CGRectGetMidX(r)>w.bounds.size.width*.20f &&
+                          CGRectGetMidX(r)<w.bounds.size.width*.80f;
+        if(nearVertical && panelLike && narrowCenter){
+            UIView *parent=node.superview;
+            CGRect pr=parent?[parent convertRect:parent.bounds toView:w]:CGRectNull;
+            [results addObject:@{
+              @"class":NSStringFromClass(node.class),
+              @"parentClass":parent?NSStringFromClass(parent.class):@"",
+              @"x":@(r.origin.x),@"y":@(r.origin.y),
+              @"w":@(r.size.width),@"h":@(r.size.height),
+              @"parentX":@(CGRectIsNull(pr)?0:pr.origin.x),
+              @"parentY":@(CGRectIsNull(pr)?0:pr.origin.y),
+              @"parentW":@(CGRectIsNull(pr)?0:pr.size.width),
+              @"parentH":@(CGRectIsNull(pr)?0:pr.size.height),
+              @"clips":@(node.clipsToBounds),
+              @"alpha":@(node.alpha),@"children":@(node.subviews.count),
+              @"bgAlpha":@(CGColorGetAlpha(node.backgroundColor.CGColor)),
+              @"depth":@(depth)
+            }];
+        }
+    }
+    for(UIView *child in node.subviews){
+        if(results.count>=100||*budget>14000)break;
+        ytmV16AuditMiniOverlayWalk(child,w,miniFrame,results,budget,depth+1);
+    }
+}
+static NSArray *ytmV16MiniOverlayAudit(UIWindow *w,UIView *mini){
+    if(!w||!mini||DuoPortrait(w))return @[];
+    NSMutableArray *records=[NSMutableArray array];
+    NSUInteger budget=0;
+    CGRect mr=[mini convertRect:mini.bounds toView:w];
+    for(UIView *child in w.subviews)
+        ytmV16AuditMiniOverlayWalk(child,w,mr,records,&budget,0);
+    return records;
+}
 static void ytmSaveCoverGeometry(UIWindow *w,YTMDuoViews *views){
     static NSUInteger counter=0;
     if(!DuoCover(w)||++counter%18!=0)return;
@@ -773,11 +823,12 @@ static void ytmSaveCoverGeometry(UIWindow *w,YTMDuoViews *views){
       @"miniHost":ytmScreenRect(views->mini.superview,w),
       @"miniHostParent":ytmScreenRect(views->mini.superview.superview,w),
       @"miniSubtree":ytmMiniSnapshot(views->mini,w),
+      @"nearMiniOverlays":ytmV16MiniOverlayAudit(w,views->mini),
       @"navParent":ytmScreenRect(views->nav.superview,w),
       @"filtersParent":ytmScreenRect(filters.superview,w),
       @"pivot":ytmScreenRect(views->pivot,w),
       @"queue":ytmScreenRect(views->queue,w),
-      @"layoutFix":@"v15"
+      @"layoutFix":@"v16"
     };
     NSData *json=[NSJSONSerialization dataWithJSONObject:data
                 options:NSJSONWritingPrettyPrinted error:NULL];
@@ -861,6 +912,6 @@ __attribute__((constructor))static void duoBootstrap(void){
             [[NSRunLoop mainRunLoop] addTimer:gLayoutTimer
                                      forMode:NSRunLoopCommonModes];
         });
-        NSLog(@"[YTMDuoFix] v15 stable cover nav reflow and exact 344.7pt mini row correction; unfolded/audio unchanged");
+        NSLog(@"[YTMDuoFix] v16 cover header real-frame fix and mini-overlay audit; unfolded/audio preserved");
     }
 }
