@@ -353,11 +353,25 @@ static void playerControlsLayout(id self, SEL cmd) {
     if(oldPlayerControlsLayout)oldPlayerControlsLayout(self,cmd);
     attachToView((UIView *)self);
 }
+static UIView *findVisibleControls(UIView *root) {
+    if(!root)return nil;
+    Class controls=objc_getClass("YTMPlayerControlsView");
+    if(controls&&[root isKindOfClass:controls]&&root.bounds.size.width>220)return root;
+    for(UIView *subview in root.subviews) {
+        UIView *match=findVisibleControls(subview);
+        if(match)return match;
+    }
+    return nil;
+}
 static void nowPlayingAppear(id self,SEL cmd,BOOL animated) {
     if(oldNowPlayingAppear)oldNowPlayingAppear(self,cmd,animated);
-    // Fallback if player controls are hosted outside the main window.
+    // YTM builds its full-player controls differently on iPad, iPhone,
+    // and foldable landscape. Find the real controls when possible;
+    // otherwise anchor on the full now-playing page as a safe fallback.
     UIViewController *vc=(UIViewController *)self;
-    if(!objc_getClass("YTMPlayerControlsView")) attachToView(vc.view);
+    UIView *view=findVisibleControls(vc.view);
+    if(!view && vc.view.bounds.size.height>350)view=vc.view;
+    if(view)attachToView(view);
 }
 
 __attribute__((constructor))static void YTMDualVolumeStart(void) {
@@ -385,6 +399,6 @@ __attribute__((constructor))static void YTMDualVolumeStart(void) {
                     (IMP)playerControlsLayout,(IMP*)&oldPlayerControlsLayout);
         swizzleOnlyClass(objc_getClass("YTMNowPlayingViewController"),@selector(viewDidAppear:),
                     (IMP)nowPlayingAppear,(IMP*)&oldNowPlayingAppear);
-        NSLog(@"[YTMDualVolume] v1 installed gain=%.2f",gain());
+        NSLog(@"[YTMDualVolume] v2 installed gain=%.2f",gain());
     }
 }
