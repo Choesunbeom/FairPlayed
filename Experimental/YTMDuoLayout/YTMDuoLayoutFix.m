@@ -489,6 +489,81 @@ static void collectMiniControllers(UIViewController *vc,
     if(vc.presentedViewController)
         collectMiniControllers(vc.presentedViewController,minis,depth+1);
 }
+// YTM 9.44 sometimes opens an oversized empty '내 현재 재생목록'
+// queue sheet over the mini player ONLY in Duo portrait. The old patch
+// searched YTMMiniPlayerView, so it never reached this unrelated sheet.
+static UIView *duoQueueCaption(UIView *v,UIWindow *w,NSUInteger *budget,int depth){
+    if(!v||depth>33||(*budget)++>5500)return nil;
+    if([v isKindOfClass:UILabel.class]){
+        NSString *title=((UILabel *)v).text?:@"";
+        if([title containsString:@"현재 재생목록"] ||
+           [title containsString:@"Current queue"] ||
+           [title containsString:@"Current playlist"]){
+            CGRect r=[v convertRect:v.bounds toView:w];
+            if(CGRectGetMidY(r)>w.bounds.size.height*.53)return v;
+        }
+    }
+    for(UIView *sub in v.subviews){
+        UIView *label=duoQueueCaption(sub,w,budget,depth+1);
+        if(label)return label;
+    }
+    return nil;
+}
+static void fixPortraitQueueSheet(UIView *root,UIWindow *w,NSArray<UIView *> *minis){
+    if(!DuoPortrait(w)||!root)return;
+    NSUInteger budget=0;
+    UIView *caption=duoQueueCaption(root,w,&budget,0);
+    if(!caption)return;
+    UIView *panel=nil;
+    for(UIView *p=caption.superview;p&&p!=root&&p!=w;p=p.superview){
+        CGRect r=[p convertRect:p.bounds toView:w];
+        if(r.size.width>=w.bounds.size.width*.74 &&
+           r.size.height>=130 && r.size.height<w.bounds.size.height*.65 &&
+           r.origin.y>w.bounds.size.height*.44){
+            panel=p;break;
+        }
+    }
+    if(!panel)return;
+    UIView *nativeMini=nil;
+    for(UIView *mini in minis){
+        if(mini==panel || [mini isDescendantOfView:panel])continue;
+        if(viewVisible(mini,w) &&
+           [mini convertRect:mini.bounds toView:w].size.height<92){
+            nativeMini=mini;break;
+        }
+    }
+    if(nativeMini){
+        // The normal transport mini-player already exists below the spurious
+        // queue sheet: reveal it by hiding the latter, without recreating
+        // YTM playback controls or replacing native interactions.
+        if(!panel.hidden){
+            panel.hidden=YES;
+            NSLog(@"[YTMDuoFix] hid auto-expanded portrait queue sheet");
+        }
+    }else{
+        // No mini transport view was found. Limit just the large sheet host
+        // to a compact strip above the navigation tabs instead of leaving
+        // a blank panel covering half the home screen.
+        CGRect r=[panel convertRect:panel.bounds toView:w];
+        CGFloat targetHeight=69.0;
+        CGFloat minBottom=w.bounds.size.height-w.safeAreaInsets.bottom-64;
+        CGFloat targetY=MAX(w.bounds.size.height*.58,minBottom-targetHeight);
+        CGRect newFrame=panel.frame;
+        if(panel.superview){
+            CGPoint target=[w convertPoint:CGPointMake(r.origin.x,targetY)
+                                   toView:panel.superview];
+            newFrame.origin.y=target.y;
+            newFrame.size.height=targetHeight;
+            if(fabs(panel.frame.size.height-targetHeight)>1 ||
+               fabs(panel.frame.origin.y-target.y)>1){
+                shrinkConstraintIfNeeded(panel,targetHeight);
+                panel.frame=newFrame;
+                panel.clipsToBounds=YES;
+            }
+        }
+    }
+}
+
 static void duoLayoutTick(NSTimer *timer){
     (void)timer;
     if(gDuoTickInProgress)return;
