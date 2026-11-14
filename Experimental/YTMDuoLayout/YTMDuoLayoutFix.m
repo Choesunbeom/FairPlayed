@@ -341,7 +341,7 @@ static void collectPivotItems(UIView *root,NSMutableArray<UIView *> *items,int d
     for(UIView *v in root.subviews)collectPivotItems(v,items,depth+1);
 }
 static BOOL tabIsSelected(UIView *v){
-    if(([v.accessibilityTraits & UIAccessibilityTraitSelected])!=0)return YES;
+    if((v.accessibilityTraits & UIAccessibilityTraitSelected)!=0)return YES;
     if([v isKindOfClass:UIControl.class] && ((UIControl *)v).selected)return YES;
     for(UIView *sub in v.subviews){
         if([sub isKindOfClass:UIControl.class]&&((UIControl *)sub).selected)return YES;
