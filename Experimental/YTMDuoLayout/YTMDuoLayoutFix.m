@@ -967,10 +967,12 @@ static void ytmV18StyleMini(UIView *mini,UIWindow *w,BOOL active){
                 [mini insertSubview:glass atIndex:0];
         }
         if(fullWatch){
-            // A sibling effect view cannot be clipped by the native
-            // miniplayer's collection view, unlike v18's child glass.
+            // Keep the glass ABOVE the scrolling feed and the native
+            // miniplayer ABOVE the glass. Native cast/play remain tappable
+            // even when YTM rebuilds its home card hierarchy.
             if([watch.subviews containsObject:host]){
-                [watch insertSubview:glass belowSubview:host];
+                [watch bringSubviewToFront:glass];
+                [watch bringSubviewToFront:host];
             }
         }else{
             [mini sendSubviewToBack:glass];
