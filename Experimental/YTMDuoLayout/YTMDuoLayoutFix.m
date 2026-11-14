@@ -436,6 +436,12 @@ __attribute__((constructor))static void duoBootstrap(void){
     @autoreleasepool{
         if(![NSBundle.mainBundle.bundleIdentifier
              isEqualToString:@"com.google.ios.youtubemusic"])return;
+        // Apply header positions AFTER each native YTM nav layout pass,
+        // rather than relying solely on a periodic correction.
+        swizzleSpecific(NSClassFromString(@"YTMNavigationBarView"),
+                        @selector(layoutSubviews),
+                        (IMP)ytmNavigationLayout,
+                        (IMP *)&oldYTMNavigationLayout);
         // Preserve the tested "only manual fullscreen" behavior.
         swizzleSpecific(UIWindow.class,@selector(sendEvent:),
                         (IMP)duoWindowSendEvent,(IMP *)&oldWindowEvent);
@@ -460,6 +466,6 @@ __attribute__((constructor))static void duoBootstrap(void){
             [[NSRunLoop mainRunLoop] addTimer:gLayoutTimer
                                      forMode:NSRunLoopCommonModes];
         });
-        NSLog(@"[YTMDuoFix] v10 exact-view 669x951 / 951x669 targeted patch loaded");
+        NSLog(@"[YTMDuoFix] v11 post-layout home navbar + bounded noninteractive glass; original audio/queue kept");
     }
 }
