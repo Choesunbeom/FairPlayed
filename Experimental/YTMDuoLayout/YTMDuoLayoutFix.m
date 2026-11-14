@@ -393,12 +393,30 @@ static BOOL ytmTabSelected(UIView *item){
         return ((BOOL(*)(id,SEL))objc_msgSend)(item,selected);
     return NO;
 }
+// v19: raise the five REAL tab hit targets and their glass backing by 8pt.
+// Keeping the original transforms avoids cumulative drift during YTM relayout.
+static const void *kV19TabBaseKey=&kV19TabBaseKey;
+static void ytmV19TabLift(UIView *tab,BOOL active){
+    if(!tab)return;
+    NSValue *value=objc_getAssociatedObject(tab,kV19TabBaseKey);
+    if(!value){
+        value=[NSValue valueWithCGAffineTransform:tab.transform];
+        objc_setAssociatedObject(tab,kV19TabBaseKey,value,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    CGAffineTransform base=value.CGAffineTransformValue;
+    CGAffineTransform desired=active?CGAffineTransformTranslate(base,0,-8.0f):base;
+    if(!CGAffineTransformEqualToTransform(tab.transform,desired))
+        tab.transform=desired;
+}
 static void ytmFixGlassDock(YTMDuoViews *views,UIWindow *w,BOOL home){
     UIView *pivot=views->pivot;
     if(!pivot)return;
     UIVisualEffectView *glass=objc_getAssociatedObject(pivot,kGlassDockKey);
     UIView *container=objc_getAssociatedObject(pivot,kGlassContainerKey);
     if(!home || !ytmVisibleInWindow(pivot,w)){
+        for(NSUInteger i=0;i<views->itemCount;i++)
+            ytmV19TabLift(views->items[i],NO);
         if(glass)glass.hidden=YES;
         return;
     }
@@ -439,6 +457,7 @@ static void ytmFixGlassDock(YTMDuoViews *views,UIWindow *w,BOOL home){
     for(NSUInteger i=0;i<views->itemCount;i++){
         UIView *tab=views->items[i];
         if(tab.hidden || tab.superview!=target || tab.bounds.size.width<30)continue;
+        ytmV19TabLift(tab,YES);
         CGRect r=[tab convertRect:tab.bounds toView:target];
         minX=MIN(minX,CGRectGetMinX(r)); maxX=MAX(maxX,CGRectGetMaxX(r));
         minY=MIN(minY,CGRectGetMinY(r)); maxY=MAX(maxY,CGRectGetMaxY(r));
