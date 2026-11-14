@@ -555,12 +555,15 @@ static void duoV10Tick(NSTimer *timer){
             if(!root)continue;
             YTMDuoViews views={0};
             NSUInteger budget=0;
-            ytmFindExactViews(root,&views,&budget,0);
-            // Genuine home screen = visible YTPivotBarView at the bottom.
+            // On the cover display, YouTube Music may place its navigation
+            // and mini dock as UIWindow siblings rather than under root.view.
+            ytmFindExactViews(DuoCover(w)?(UIView *)w:root,&views,&budget,0);
             BOOL home=ytmVisibleInWindow(views.pivot,w);
             ytmFixHeaderButtons(views.nav,w,home);
             ytmFixQueueOverlay(views.queue,home,views.mini,w);
+            ytmCoverRepairHome(w,&views,home);
             ytmFixGlassDock(&views,w,home);
+            if(home)ytmSaveCoverGeometry(w,&views);
         }
     }@catch(NSException *e){
         NSLog(@"[YTMDuoFix] v10 nonfatal layout exception %@",e.reason);
@@ -601,6 +604,6 @@ __attribute__((constructor))static void duoBootstrap(void){
             [[NSRunLoop mainRunLoop] addTimer:gLayoutTimer
                                      forMode:NSRunLoopCommonModes];
         });
-        NSLog(@"[YTMDuoFix] v11 post-layout home navbar + bounded noninteractive glass; original audio/queue kept");
+        NSLog(@"[YTMDuoFix] v12 cover geometry and static glass, unfolded nav and original audio/queue preserved");
     }
 }
