@@ -133,17 +133,19 @@ static BOOL viewVisible(UIView *v,UIWindow *w){
 }
 static void collectViewTypes(UIView *v,NSMutableArray *headers,
                              NSMutableArray *pivots,NSMutableArray *minis,
-                             NSUInteger *budget){
-    if(!v||(*budget)++>4000)return;
+                             NSMutableArray *tabItems,NSUInteger *budget){
+    if(!v || (*budget)++>6500)return;
     NSString *n=NSStringFromClass(v.class);
-    if([n isEqualToString:@"YTMNavigationBarView"]) [headers addObject:v];
-    if([n isEqualToString:@"YTPivotBarView"]||[n isEqualToString:@"YTFloatingPivotBarView"])
-        [pivots addObject:v];
-    if([n isEqualToString:@"YTMMiniPlayerView"]||
-       [n isEqualToString:@"YTMOfflineMiniPlayerView"]) [minis addObject:v];
+    if([n containsString:@"YTMNavigationBarView"]) [headers addObject:v];
+    if([n containsString:@"YTPivotBarView"]||
+       [n containsString:@"YTFloatingPivotBarView"]) [pivots addObject:v];
+    if([n containsString:@"YTMMiniPlayerView"]||
+       [n containsString:@"YTMOfflineMiniPlayerView"]) [minis addObject:v];
+    if([n isEqualToString:@"YTPivotBarItemView"] ||
+       [n hasSuffix:@"PivotBarItemView"]) [tabItems addObject:v];
     for(UIView *child in v.subviews){
-        if(*budget>4000)break;
-        collectViewTypes(child,headers,pivots,minis,budget);
+        if(*budget>6500)break;
+        collectViewTypes(child,headers,pivots,minis,tabItems,budget);
     }
 }
 
@@ -294,6 +296,36 @@ static UIVisualEffectView *createGlass(UIView *pivot){
     [pivot insertSubview:g atIndex:0];
     return g;
 }
+// Put native Liquid Glass INSIDE each real pivot button, beneath its icon
+// and label. The glass view never receives touches: all original actions work.
+static void fixTabItemGlass(UIView *item, UIWindow *w){
+    if(!viewVisible(item,w) || !DuoIsFoldable(w))return;
+    CGRect r=[item convertRect:item.bounds toView:w];
+    CGFloat h=w.bounds.size.height;
+    if(CGRectGetMidY(r)<h-125 ||
+       r.size.width<32 || r.size.width>220 ||
+       r.size.height<33 || r.size.height>125)return;
+    UIVisualEffectView *glass=objc_getAssociatedObject(item,kDuoGlassKey);
+    if(!glass || ![glass isKindOfClass:UIVisualEffectView.class]){
+        glass=[[UIVisualEffectView alloc]initWithEffect:systemGlass()];
+        glass.userInteractionEnabled=NO;
+        glass.clipsToBounds=YES;
+        glass.alpha=1;
+        if(@available(iOS 13.0,*))glass.layer.cornerCurve=kCACornerCurveContinuous;
+        [item insertSubview:glass atIndex:0];
+        objc_setAssociatedObject(item,kDuoGlassKey,glass,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        item.opaque=NO;
+        item.backgroundColor=UIColor.clearColor;
+    }
+    CGRect bounds=CGRectInset(item.bounds,4,5);
+    bounds.size.height=MIN(bounds.size.height,53);
+    glass.frame=bounds;
+    glass.layer.cornerRadius=MIN(22,bounds.size.height/2);
+    glass.hidden=NO;
+    [item sendSubviewToBack:glass];
+}
+
 static void fixPivot(UIView *pivot,UIWindow *w){
     if(!viewVisible(pivot,w))return;
     NSMutableArray<UIView *> *items=[NSMutableArray array];
@@ -321,15 +353,21 @@ static void fixPivot(UIView *pivot,UIWindow *w){
             [pivot sendSubviewToBack:glass];
         }
     } else {
-        if(glasses.count==0)[glasses addObject:createGlass(pivot)];
+        // Some Music builds render their five home tabs without
+        // YTPivotBarItemView children. Keep five individual glass capsules
+        // behind those controls rather than painting one opaque full bar.
+        NSUInteger fallbackCount=5;
+        while(glasses.count<fallbackCount)[glasses addObject:createGlass(pivot)];
+        CGFloat slice=pivot.bounds.size.width/fallbackCount;
         for(NSUInteger i=0;i<glasses.count;i++){
             UIVisualEffectView *glass=glasses[i];
-            glass.hidden=i!=0;
-            if(i==0){
-                glass.frame=CGRectInset(pivot.bounds,10,4);
-                glass.layer.cornerRadius=23;
-                [pivot sendSubviewToBack:glass];
-            }
+            glass.hidden=i>=fallbackCount;
+            if(i>=fallbackCount)continue;
+            CGFloat itemHeight=MIN(53,MAX(40,pivot.bounds.size.height-12));
+            glass.frame=CGRectMake(i*slice+7,(pivot.bounds.size.height-itemHeight)/2,
+                                   MAX(20,slice-14),itemHeight);
+            glass.layer.cornerRadius=MIN(23,itemHeight/2);
+            [pivot sendSubviewToBack:glass];
         }
     }
     pivot.backgroundColor=UIColor.clearColor;
