@@ -585,13 +585,20 @@ static void duoLayoutTick(NSTimer *timer){
             // Never make any fix depend on the others.
             BOOL isHome=(headers.count>0||pivots.count>0||
                          tabItems.count>=3||minis.count>0);
+            // The geometry-based avatar pass is now the ONLY header
+            // adjuster; do not overwrite its transform with the old
+            // generic YTMNavigationBarView adjustment.
             if(isHome)fixHeaderByGeometry(rootVC.viewIfLoaded,w);
-            for(UIView *v in headers)fixHeader(v,w);
-            for(UIView *v in pivots)fixPivot(v,w);
-            for(UIView *v in tabItems)fixTabItemGlass(v,w);
+            if(pivots.count>0){
+                for(UIView *v in pivots)fixPivot(v,w);
+            }else if(tabItems.count>=3){
+                UIView *dock=commonPivotContainer(tabItems,w);
+                if(dock)fixPivot(dock,w);
+            }
             if(DuoPortrait(w)){
                 collectMiniControllers(rootVC,minis,0);
                 for(UIView *v in minis)fixMiniplayer(v,w);
+                if(isHome)fixPortraitQueueSheet(rootVC.viewIfLoaded,w,minis);
             }
         }
     }@catch(NSException *e){
@@ -622,6 +629,6 @@ __attribute__((constructor))static void duoBootstrap(void) {
             }];
             [[NSRunLoop mainRunLoop] addTimer:gLayoutTimer forMode:NSRunLoopCommonModes];
         });
-        NSLog(@"[YTMDuoFix] Duo v6 independent home header/mini/native glass + manual fullscreen guard installed");
+        NSLog(@"[YTMDuoFix] Duo v7 actual avatar/queue-sheet + unified floating glass dock + manual fullscreen guard");
     }
 }
