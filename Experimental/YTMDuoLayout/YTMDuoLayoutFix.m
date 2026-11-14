@@ -470,6 +470,10 @@ static BOOL ytmPlaceAtWindowY(UIView *v,UIWindow *w,CGFloat desired){
     if(!v||!w||v.window!=w)return NO;
     CGAffineTransform base=ytmStoredBaseTransform(v);
     CGFloat prior=[objc_getAssociatedObject(v,kV15AppliedYKey) doubleValue];
+    // Native YTM layout can reset a view's transform to its base value.
+    // When that happens our previous offset is no longer present in the
+    // current CGRect, so do not subtract it twice.
+    if(CGAffineTransformEqualToTransform(v.transform,base))prior=0;
     CGRect current=[v convertRect:v.bounds toView:w];
     if(CGRectIsNull(current)||CGRectIsInfinite(current) ||
        current.size.width<25)return NO;
