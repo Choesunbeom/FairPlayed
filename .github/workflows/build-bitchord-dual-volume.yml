@@ -1,0 +1,137 @@
+name: Build BitChord 1.0.2 dual-volume unsigned IPA
+
+on:
+  push:
+    branches:
+      - bitchord-dual-volume-20261114
+    paths:
+      - 'Experimental/BitChordDualVolume/**'
+      - '.github/workflows/build-bitchord-dual-volume.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      IPHONEOS_DEPLOYMENT_TARGET: '18.0'
+      CONFIG: release
+    steps:
+      - name: Checkout user's dual-volume patch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout upstream BitChord 1.0.2
+        uses: actions/checkout@v4
+        with:
+          repository: bagumamartin/BitChord
+          ref: v1.0.2
+          path: BitChord-src
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Java 21 for Kotlin Multiplatform
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Set up Rust for Apple Silicon and iPhone
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin,aarch64-apple-ios
+
+      - name: Install build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          brew list cmake >/dev/null 2>&1 || brew install cmake
+          rustc --version
+          cargo --version
+          java -version
+          xcodegen --version
+
+      - name: Apply dual-mode volume UI and assert mixing unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Experimental/BitChordDualVolume/patch.py BitChord-src
+          xcrun swiftc -frontend -parse BitChord-src/AppleApp/Sources/UI/NowPlaying/DualVolumeControl.swift
+          xcrun swiftc -frontend -parse BitChord-src/AppleApp/Sources/UI/NowPlaying/NowPlayingView+Transport.swift
+          grep -q 'mixWithOthers' BitChord-src/AppleApp/Sources/PlaybackSession/AudioSessionManager.swift
+
+      - name: Build Release Kotlin shared framework
+        shell: bash
+        working-directory: BitChord-src
+        run: |
+          set -euo pipefail
+          CONFIG=release ./scripts/build-shared-framework.sh
+
+      - name: Build Release Rust audio engine and Swift bindings
+        shell: bash
+        working-directory: BitChord-src
+        run: |
+          set -euo pipefail
+          NATIVE_TARGETS="aarch64-apple-darwin aarch64-apple-ios" ./scripts/build-native-core.sh
+
+      - name: Generate BitChord Xcode project
+        shell: bash
+        working-directory: BitChord-src
+        run: |
+          set -euo pipefail
+          xcodegen generate --spec AppleApp/project.yml
+          xcodebuild -list -project AppleApp/BitChord.xcodeproj
+
+      - name: Build unsigned iPhone app
+        shell: bash
+        working-directory: BitChord-src
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project AppleApp/BitChord.xcodeproj \
+            -scheme BitChord \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/BitChordDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM='' \
+            build 2>&1 | tee "$RUNNER_TEMP/bitchord-xcodebuild.log"
+
+      - name: Package and verify unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/BitChordDerivedData/Build/Products/Release-iphoneos/BitChord.app"
+          test -f "$APP/BitChord"
+          test -f "$APP/Info.plist"
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")" = "com.music.bitchord" ]
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")" = "1.0.2" ]
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "41" ]
+          mkdir -p package/Payload dist
+          /usr/bin/ditto "$APP" package/Payload/BitChord.app
+          find package -name embedded.mobileprovision -type f -delete
+          (cd package && /usr/bin/zip -qry -9 ../dist/BitChord-1.0.2-DualVolume-unsigned.ipa Payload)
+          unzip -tq dist/BitChord-1.0.2-DualVolume-unsigned.ipa | tail -1
+          (cd dist && shasum -a 256 BitChord-1.0.2-DualVolume-unsigned.ipa > SHA256.txt)
+          ls -lh dist/*
+
+      - name: Upload BitChord dual-volume IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: BitChord-1.0.2-DualVolume-unsigned-IPA
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
