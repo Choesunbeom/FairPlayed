@@ -762,12 +762,134 @@ static void ytmFitCoverMiniContents(UIView *mini,UIWindow *w){
         NSLog(@"[YTMDuoFix] v15 cover mini row corrected from 344.7 to %.1fpt",textWidth);
     }
 }
+static void ytmV18StyleMini(UIView *mini,UIWindow *w,BOOL active);
 static void (*oldYTMMiniplayerLayout)(id,SEL);
 static void ytmMiniplayerLayout(id self,SEL cmd){
     if(oldYTMMiniplayerLayout)oldYTMMiniplayerLayout(self,cmd);
     UIWindow *w=((UIView *)self).window;
-    if(w && DuoCover(w)&&!DuoPortrait(w))
+    if(w && DuoCover(w)&&!DuoPortrait(w)) {
         ytmFitCoverMiniContents((UIView *)self,w);
+        ytmV18StyleMini((UIView *)self,w,YES);
+    }
+}
+// v18: The latest cover capture confirms v17 expanded the independent
+// background to the full 678pt, but the actual UICollectionView is STILL
+// bgAlpha=1. Remove only the opaque player backgrounds and render an
+// untouchable, clear Liquid Glass surface UNDER the native song controls.
+static const void *kV18MiniGlassKey=&kV18MiniGlassKey;
+static const void *kV18MiniSavedColorKey=&kV18MiniSavedColorKey;
+static const void *kV18GradientOpacityKey=&kV18GradientOpacityKey;
+static void ytmV18Background(UIView *v,BOOL clear){
+    if(!v)return;
+    if(clear){
+        if(!objc_getAssociatedObject(v,kV18MiniSavedColorKey)){
+            id original=v.backgroundColor ?: [NSNull null];
+            objc_setAssociatedObject(v,kV18MiniSavedColorKey,original,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if(v.backgroundColor!=UIColor.clearColor)
+            v.backgroundColor=UIColor.clearColor;
+    }else{
+        id saved=objc_getAssociatedObject(v,kV18MiniSavedColorKey);
+        if(saved){
+            v.backgroundColor=saved==[NSNull null]?nil:(UIColor *)saved;
+            objc_setAssociatedObject(v,kV18MiniSavedColorKey,nil,
+                                     OBJC_ASSOCIATION_ASSIGN);
+        }
+    }
+}
+static void ytmV18HostGradient(UIView *host,BOOL clear){
+    if(!host)return;
+    for(CALayer *sub in host.layer.sublayers){
+        if(![sub isKindOfClass:CAGradientLayer.class])continue;
+        NSNumber *saved=objc_getAssociatedObject(sub,kV18GradientOpacityKey);
+        if(clear){
+            if(!saved)objc_setAssociatedObject(sub,kV18GradientOpacityKey,
+                             @(sub.opacity),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if(sub.opacity!=0)sub.opacity=0;
+        }else if(saved){
+            sub.opacity=saved.floatValue;
+            objc_setAssociatedObject(sub,kV18GradientOpacityKey,nil,
+                                     OBJC_ASSOCIATION_ASSIGN);
+        }
+    }
+}
+static UIVisualEffect *ytmV18ClearGlassEffect(void){
+    Class effectClass=NSClassFromString(@"UIGlassEffect");
+    SEL selector=NSSelectorFromString(@"effectWithStyle:");
+    if(effectClass && [effectClass respondsToSelector:selector]){
+        // iOS 26+ SDK enum: clear-style glass (raw value 1).
+        id fx=((id(*)(id,SEL,NSInteger))objc_msgSend)(effectClass,selector,1);
+        SEL interactive=NSSelectorFromString(@"setInteractive:");
+        if(fx && [fx respondsToSelector:interactive])
+            ((void(*)(id,SEL,BOOL))objc_msgSend)(fx,interactive,NO);
+        if([fx isKindOfClass:UIVisualEffect.class])return fx;
+    }
+    return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
+}
+static BOOL gV18StylingMini=NO;
+static void ytmV18StyleMini(UIView *mini,UIWindow *w,BOOL active){
+    if(gV18StylingMini || !mini)return;
+    active=active && w && DuoCover(w) && !DuoPortrait(w) &&
+           mini.bounds.size.width>650 && mini.bounds.size.width<710;
+    gV18StylingMini=YES;
+    @try{
+        UIVisualEffectView *glass=objc_getAssociatedObject(mini,kV18MiniGlassKey);
+        UIView *host=mini.superview;
+        UIView *watch=host.superview;
+        ytmV18Background(mini,active);
+        if(host && [NSStringFromClass(host.class)
+                    isEqualToString:@"YTMGradientBackgroundView"]){
+            ytmV18Background(host,active);
+            ytmV18HostGradient(host,active);
+        }
+        // The actual black field in v17 was an opaque, empty YTMWatchView
+        // sibling. It is now 678pt wide but still black: clear its fill.
+        if([NSStringFromClass(watch.class) isEqualToString:@"YTMWatchView"]){
+            for(UIView *v in watch.subviews){
+                if(objc_getAssociatedObject(v,kV17MiniBackdropKey))
+                    ytmV18Background(v,active);
+            }
+        }
+        for(UIView *strip in mini.subviews){
+            if(![NSStringFromClass(strip.class) isEqualToString:@"UIView"])
+                continue;
+            for(UIView *sub in strip.subviews){
+                if([sub isKindOfClass:UICollectionView.class]){
+                    ytmV18Background(sub,active);
+                    sub.opaque=!active;
+                }
+            }
+        }
+        mini.opaque=!active;
+        if(host)host.opaque=!active;
+        if(!active){
+            if(glass)glass.hidden=YES;
+            return;
+        }
+        if(!glass){
+            glass=[[UIVisualEffectView alloc]
+                    initWithEffect:ytmV18ClearGlassEffect()];
+            glass.userInteractionEnabled=NO; // native playback buttons win
+            glass.alpha=1;                   // do not weaken glass render
+            glass.clipsToBounds=YES;
+            glass.layer.cornerCurve=kCACornerCurveContinuous;
+            glass.layer.borderWidth=.6f;
+            glass.layer.borderColor=
+                [[UIColor whiteColor] colorWithAlphaComponent:.22f].CGColor;
+            objc_setAssociatedObject(mini,kV18MiniGlassKey,glass,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        glass.frame=CGRectInset(mini.bounds,7,2);
+        glass.layer.cornerRadius=17.0f;
+        glass.hidden=NO;
+        if(glass.superview!=mini){
+            [glass removeFromSuperview];
+            [mini insertSubview:glass atIndex:0];
+        }else{
+            [mini sendSubviewToBack:glass];
+        }
+    }@finally{gV18StylingMini=NO;}
 }
 // v17: In the actual cover-landscape JSON the YTMWatchView contains one
 // empty, fully opaque UIView at x=118.33 y=320 w=440.67 h=64. This EXACT
@@ -891,6 +1013,7 @@ static void ytmCoverRepairHome(UIWindow *w,YTMDuoViews *views,BOOL home){
     if(!DuoCover(w)||!home){
         ytmRestoreCoverHeaderPair(views->nav);
         ytmRestoreCoverHeaderPair(filters);
+        ytmV18StyleMini(views->mini,w,NO);
         return;
     }
     if(!DuoPortrait(w)){
@@ -903,9 +1026,11 @@ static void ytmCoverRepairHome(UIWindow *w,YTMDuoViews *views,BOOL home){
         ytmCoverMiniReflow(views->mini,views->pivot,w);
         ytmFitCoverMiniContents(views->mini,w);
         ytmV17RepairMiniBackdrop(views->mini.superview.superview);
+        ytmV18StyleMini(views->mini,w,YES);
     }else{
         ytmRestoreCoverHeaderPair(views->nav);
         ytmRestoreCoverHeaderPair(filters);
+        ytmV18StyleMini(views->mini,w,NO);
     }
 }
 static NSDictionary *ytmScreenRect(UIView *v,UIWindow *w){
