@@ -192,27 +192,53 @@ static void ytmRestoreHeader(UIView *nav) {
     }
 }
 static void ytmFixHeaderButtons(UIView *nav,UIWindow *w,BOOL home) {
-    if(!nav)return;
-    if(!home){ytmRestoreHeader(nav);return;}
+    if(!nav || !w)return;
     UIView *profile=nil,*activity=nil;
-    // These are the actual immediate children from BOTH diagnostics:
-    // portrait QTMButton x621, YTMNavbarActivityButton x573;
-    // landscape QTMButton x903, activity x855.
-    for(UIView *child in nav.subviews){
-        NSString *name=NSStringFromClass(child.class);
-        if([name isEqualToString:@"QTMButton"])profile=child;
-        else if([name isEqualToString:@"YTMNavbarActivityButton"])
-            activity=child;
+    // Exact classes obtained from the portrait/landscape diagnostic snapshots.
+    // Portrait: profile QTMButton x621, bell YTMNavbarActivityButton x573.
+    // Landscape: profile x903, bell x855.
+    for(UIView *v in nav.subviews) {
+        NSString *cls=NSStringFromClass(v.class);
+        if([cls isEqualToString:@"QTMButton"] && v.bounds.size.width>=25)
+            profile=v;
+        else if([cls isEqualToString:@"YTMNavbarActivityButton"])
+            activity=v;
     }
-    if(!profile || !activity)return;
-    CGRect r=[profile convertRect:profile.bounds toView:w];
-    if(r.size.width<25 || r.size.width>65)return;
-    // Native nav is laid out at y2 despite a top safe area of 82pt.
-    // Reserve 146pt at the right for the Duo status overlay.
-    // Compute from the base layout (profile right edge was w-8pt).
-    CGFloat dx=-140.0f;
-    ytmSetHeaderTranslation(profile,dx);
-    ytmSetHeaderTranslation(activity,dx);
+    if(!profile||!activity)return;
+    CGFloat navW=nav.bounds.size.width;
+    if(navW<550 || navW>1200)return;
+    // Apply to BOTH the frames and the native hit rectangles. Previously
+    // changing only UIView.transform could be undone by YTM layout.
+    // 124pt frees room for the Duo's right-side system-status orb.
+    CGFloat offset=home ? 124.0f : 0.0f;
+    CGRect pf=profile.frame, af=activity.frame;
+    CGFloat profileX=navW-48.0f-offset;
+    CGFloat activityX=navW-96.0f-offset;
+    if(fabs(pf.origin.x-profileX)>0.3) {
+        pf.origin.x=profileX;
+        profile.frame=pf;
+    }
+    if(fabs(af.origin.x-activityX)>0.3) {
+        af.origin.x=activityX;
+        activity.frame=af;
+    }
+}
+// YTMNavigationBarView's own layout frequently resets children AFTER our
+// polling fix. Run the precise adjustment immediately after each native
+// layout pass as well. The periodic tick is a redundant fallback.
+static void (*oldYTMNavigationLayout)(id,SEL);
+static void ytmNavigationLayout(id self,SEL cmd) {
+    if(oldYTMNavigationLayout)oldYTMNavigationLayout(self,cmd);
+    UIView *nav=(UIView *)self;
+    UIWindow *w=nav.window;
+    if(!DuoIsFoldable(w))return;
+    UIView *root=w.rootViewController.viewIfLoaded;
+    if(!root)return;
+    YTMDuoViews views={0};
+    NSUInteger budget=0;
+    ytmFindExactViews(root,&views,&budget,0);
+    BOOL home=(views.nav==nav && ytmVisibleInWindow(views.pivot,w));
+    ytmFixHeaderButtons(nav,w,home);
 }
 static void ytmFixQueueOverlay(UIView *tab,BOOL home,UIView *mini,UIWindow *w) {
     if(!tab)return;
