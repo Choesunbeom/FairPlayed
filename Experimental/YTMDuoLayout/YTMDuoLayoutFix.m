@@ -443,44 +443,57 @@ static void ytmCoverRestoreVertical(UIView *v){
                                                       original.CGAffineTransformValue))
         v.transform=original.CGAffineTransformValue;
 }
+// The cover display's landscape diagnostics showed top navigation y=82
+// but chips y=49. In the screenshot the two rows overlap the feed header.
+// Normalize the two independent rows to the unfolded layout's top anchor.
+// No arbitrary resizing or scaling of the home feed is performed.
 static void ytmCoverTopReflow(UIView *v,UIWindow *w,CGFloat expectedY,CGFloat threshold){
-    if(!v||!w)return;
+    (void)threshold;
+    if(!v||!w||!DuoCover(w)||DuoPortrait(w))return;
     NSValue *saved=objc_getAssociatedObject(v,kCoverVerticalOriginKey);
     if(!saved){
         saved=[NSValue valueWithCGAffineTransform:v.transform];
         objc_setAssociatedObject(v,kCoverVerticalOriginKey,saved,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    // Compare with the original transform, never the transform that our
-    // previous timer tick applied (avoids slowly drifting off-screen).
-    v.transform=saved.CGAffineTransformValue;
+    // Restore the native transform before calculating absolute positions,
+    // preventing accumulating offsets over 0.45s refresh ticks.
+    CGAffineTransform native=saved.CGAffineTransformValue;
+    v.transform=native;
     CGRect rect=[v convertRect:v.bounds toView:w];
-    CGFloat delta=0;
-    if(rect.origin.y>threshold && rect.origin.y<w.bounds.size.height*.50)
-        delta=expectedY-rect.origin.y;
-    if(fabs(delta)>1)
-        v.transform=CGAffineTransformTranslate(saved.CGAffineTransformValue,0,delta);
+    if(rect.size.width<w.bounds.size.width*.85 ||
+       rect.size.height<28 || rect.size.height>80)return;
+    CGFloat delta=expectedY-rect.origin.y;
+    if(fabs(delta)>1.5 && fabs(delta)<w.bounds.size.height*.35)
+        v.transform=CGAffineTransformTranslate(native,0,delta);
 }
 static void ytmCoverMiniReflow(UIView *mini,UIView *pivot,UIWindow *w){
     if(!mini||!pivot||!w||!DuoCover(w)||DuoPortrait(w))return;
     CGRect tab=[pivot convertRect:pivot.bounds toView:w];
-    CGRect m=[mini convertRect:mini.bounds toView:w];
     if(!CGRectIntersectsRect(tab,w.bounds) || tab.size.height<38)return;
+    CGRect m=[mini convertRect:mini.bounds toView:w];
     CGFloat desiredY=MAX(0,CGRectGetMinY(tab)-64);
-    // Only repair an actually displaced/centered native dock. The normal
-    // full-width mini-player is never touched.
-    BOOL wrongWidth=m.size.width<w.bounds.size.width*.91 ||
-                    m.origin.x>14;
-    BOOL wrongY=fabs(m.origin.y-desiredY)>32;
-    if(!wrongWidth && !wrongY)return;
-    CGRect desired=CGRectMake(0,desiredY,w.bounds.size.width,64);
+    // A correct mini.frame can still be CLIPPED by an undersized parent
+    // YTMGradientBackgroundView (as the cover landscape screenshot shows).
     UIView *host=mini.superview;
+    CGRect hostRect=host?[host convertRect:host.bounds toView:w]:CGRectNull;
+    BOOL hostClipped=host && (hostRect.size.width<w.bounds.size.width*.91 ||
+                             hostRect.origin.x>12 ||
+                             hostRect.size.height<55 ||
+                             fabs(hostRect.origin.y-desiredY)>17);
+    BOOL miniDisplaced=(m.size.width<w.bounds.size.width*.91 ||
+                        m.origin.x>12 || fabs(m.origin.y-desiredY)>20);
+    if(!hostClipped && !miniDisplaced)return;
+    CGRect desired=CGRectMake(0,desiredY,w.bounds.size.width,64);
     if(host && [NSStringFromClass(host.class)
-                isEqualToString:@"YTMGradientBackgroundView"] && host.superview){
+                isEqualToString:@"YTMGradientBackgroundView"] &&
+       host.superview){
         CGRect newHost=[w convertRect:desired toView:host.superview];
+        // Adjust ONLY the clipped mini-player host. Do not move or resize
+        // the pivot tabs, scroll feed or unfolded/cover portrait screens.
         host.frame=newHost;
         mini.frame=host.bounds;
-    }else if(mini.superview){
+    }else if(mini.superview && miniDisplaced){
         mini.frame=[w convertRect:desired toView:mini.superview];
     }
 }
@@ -511,8 +524,8 @@ static void ytmCoverRepairHome(UIWindow *w,YTMDuoViews *views,BOOL home){
         // The cover-landscape screenshot showed header chips around y=180
         // and the Music logo below them. Only correct genuinely displaced
         // header rows; their native x positions and interactions stay intact.
-        ytmCoverTopReflow(views->nav,w,2,85);
-        ytmCoverTopReflow(filters,w,64,110);
+        ytmCoverTopReflow(views->nav,w,2,0);
+        ytmCoverTopReflow(filters,w,58,0);
         ytmCoverMiniReflow(views->mini,views->pivot,w);
     }else{
         ytmCoverRestoreVertical(views->nav);
