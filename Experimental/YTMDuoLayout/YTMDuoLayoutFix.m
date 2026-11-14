@@ -1106,6 +1106,36 @@ static NSArray *ytmV16MiniOverlayAudit(UIWindow *w,UIView *mini){
         ytmV16AuditMiniOverlayWalk(child,w,mr,records,&budget,0);
     return records;
 }
+static NSArray *ytmV18NavControls(UIView *nav,UIWindow *w){
+    NSMutableArray *a=[NSMutableArray array];
+    if(!nav||!w)return a;
+    for(UIView *child in nav.subviews){
+        CGRect r=[child convertRect:child.bounds toView:w];
+        [a addObject:@{
+         @"class":NSStringFromClass(child.class),
+         @"x":@(r.origin.x),@"y":@(r.origin.y),
+         @"w":@(r.size.width),@"h":@(r.size.height),
+         @"shifted":@(objc_getAssociatedObject(child,kV18LogoBaseTransformKey)!=nil),
+         @"children":@(child.subviews.count)
+        }];
+    }
+    return a;
+}
+static NSDictionary *ytmV18MiniGlassInfo(UIView *mini,UIWindow *w){
+    if(!mini||!w)return @{};
+    UIVisualEffectView *glass=objc_getAssociatedObject(mini,kV18MiniGlassKey);
+    UIView *container=nil;
+    for(UIView *strip in mini.subviews)
+        for(UIView *sub in strip.subviews)
+            if([sub isKindOfClass:UICollectionView.class])container=sub;
+    CGRect r=glass?[glass convertRect:glass.bounds toView:w]:CGRectZero;
+    return @{@"enabled":@(glass && !glass.hidden),
+             @"effect":glass.effect?NSStringFromClass(glass.effect.class):@"none",
+             @"glassFrame":@{@"x":@(r.origin.x),@"y":@(r.origin.y),
+                             @"w":@(r.size.width),@"h":@(r.size.height)},
+             @"collectionBgAlpha":@(container.backgroundColor ?
+                CGColorGetAlpha(container.backgroundColor.CGColor) : 0)};
+}
 static void ytmSaveCoverGeometry(UIWindow *w,YTMDuoViews *views){
     static NSUInteger counter=0;
     if(!DuoCover(w)||++counter%18!=0)return;
@@ -1125,12 +1155,14 @@ static void ytmSaveCoverGeometry(UIWindow *w,YTMDuoViews *views){
       @"nearMiniOverlays":ytmV16MiniOverlayAudit(w,views->mini),
       @"miniBackdrop":ytmV17BackdropInfo(views->mini,w),
       @"navAncestors":ytmV17AncestorInfo(views->nav,w),
+      @"navControls":ytmV18NavControls(views->nav,w),
+      @"miniGlass":ytmV18MiniGlassInfo(views->mini,w),
       @"filterAncestors":ytmV17AncestorInfo(filters,w),
       @"navParent":ytmScreenRect(views->nav.superview,w),
       @"filtersParent":ytmScreenRect(filters.superview,w),
       @"pivot":ytmScreenRect(views->pivot,w),
       @"queue":ytmScreenRect(views->queue,w),
-      @"layoutFix":@"v17"
+      @"layoutFix":@"v18"
     };
     NSData *json=[NSJSONSerialization dataWithJSONObject:data
                 options:NSJSONWritingPrettyPrinted error:NULL];
@@ -1220,6 +1252,6 @@ __attribute__((constructor))static void duoBootstrap(void){
             [[NSRunLoop mainRunLoop] addTimer:gLayoutTimer
                                      forMode:NSRunLoopCommonModes];
         });
-        NSLog(@"[YTMDuoFix] v17 exact opaque mini backdrop + cover header transforms; unfolded/audio preserved");
+        NSLog(@"[YTMDuoFix] v18 clear mini Liquid Glass and cover-landscape right-aligned navigation; unfolded/audio preserved");
     }
 }
