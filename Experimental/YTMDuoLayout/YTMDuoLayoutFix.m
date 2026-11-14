@@ -327,100 +327,102 @@ static UIVisualEffect *systemGlass(void){
     }
     return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark];
 }
+// A single floating Liquid Glass dock replaces the five large, separate
+// dark pills. Existing tab icon/label views remain fully interactive.
+static const void *kDuoSelectedGlassKey=&kDuoSelectedGlassKey;
 static void collectPivotItems(UIView *root,NSMutableArray<UIView *> *items,int depth){
-    if(depth>10)return;
-    NSString *n=NSStringFromClass(root.class);
-    if([n isEqualToString:@"YTPivotBarItemView"]){
-        [items addObject:root];return;
+    if(!root||depth>12)return;
+    NSString *cls=NSStringFromClass(root.class);
+    if([cls isEqualToString:@"YTPivotBarItemView"] ||
+       [cls hasSuffix:@"PivotBarItemView"]){
+        [items addObject:root];
+        return;
     }
     for(UIView *v in root.subviews)collectPivotItems(v,items,depth+1);
 }
-static UIVisualEffectView *createGlass(UIView *pivot){
-    UIVisualEffectView *g=[[UIVisualEffectView alloc]initWithEffect:systemGlass()];
-    g.userInteractionEnabled=NO;
-    g.clipsToBounds=YES;
-    g.layer.cornerRadius=19;
-    if(@available(iOS 13.0,*))g.layer.cornerCurve=kCACornerCurveContinuous;
-    g.alpha=1.0;
-    [pivot insertSubview:g atIndex:0];
-    return g;
+static BOOL tabIsSelected(UIView *v){
+    if(([v.accessibilityTraits & UIAccessibilityTraitSelected])!=0)return YES;
+    if([v isKindOfClass:UIControl.class] && ((UIControl *)v).selected)return YES;
+    for(UIView *sub in v.subviews){
+        if([sub isKindOfClass:UIControl.class]&&((UIControl *)sub).selected)return YES;
+    }
+    return NO;
 }
-// Put native Liquid Glass INSIDE each real pivot button, beneath its icon
-// and label. The glass view never receives touches: all original actions work.
-static void fixTabItemGlass(UIView *item, UIWindow *w){
-    if(!viewVisible(item,w) || !DuoIsFoldable(w))return;
-    CGRect r=[item convertRect:item.bounds toView:w];
-    CGFloat h=w.bounds.size.height;
-    if(CGRectGetMidY(r)<h-125 ||
-       r.size.width<32 || r.size.width>220 ||
-       r.size.height<33 || r.size.height>125)return;
-    UIVisualEffectView *glass=objc_getAssociatedObject(item,kDuoGlassKey);
+static UIView *commonPivotContainer(NSArray<UIView *> *tabs,UIWindow *w){
+    if(tabs.count<3)return nil;
+    UIView *candidate=[tabs firstObject];
+    for(int count=0;candidate && count<10;count++,candidate=candidate.superview){
+        BOOL all=YES;
+        for(UIView *tab in tabs){
+            if(tab!=candidate && ![tab isDescendantOfView:candidate]){all=NO;break;}
+        }
+        if(!all)continue;
+        CGRect r=[candidate convertRect:candidate.bounds toView:w];
+        if(r.size.width>w.bounds.size.width*.70 &&
+           r.size.height>=38 && r.size.height<160)return candidate;
+    }
+    return nil;
+}
+static void fixPivot(UIView *pivot,UIWindow *w){
+    if(!viewVisible(pivot,w))return;
+    CGRect wr=[pivot convertRect:pivot.bounds toView:w];
+    if(wr.size.width<w.bounds.size.width*.68 ||
+       CGRectGetMidY(wr)<w.bounds.size.height-148 ||
+       wr.size.height<36 || wr.size.height>165)return;
+    UIVisualEffectView *glass=objc_getAssociatedObject(pivot,kDuoGlassKey);
     if(!glass || ![glass isKindOfClass:UIVisualEffectView.class]){
         glass=[[UIVisualEffectView alloc]initWithEffect:systemGlass()];
         glass.userInteractionEnabled=NO;
         glass.clipsToBounds=YES;
-        glass.alpha=1;
-        if(@available(iOS 13.0,*))glass.layer.cornerCurve=kCACornerCurveContinuous;
-        [item insertSubview:glass atIndex:0];
-        objc_setAssociatedObject(item,kDuoGlassKey,glass,
+        glass.alpha=1.0;
+        glass.layer.cornerCurve=kCACornerCurveContinuous;
+        glass.layer.borderWidth=0.75;
+        glass.layer.borderColor=[UIColor.whiteColor
+                         colorWithAlphaComponent:0.19].CGColor;
+        [pivot insertSubview:glass atIndex:0];
+        objc_setAssociatedObject(pivot,kDuoGlassKey,glass,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        item.opaque=NO;
-        item.backgroundColor=UIColor.clearColor;
+        UIView *selection=[[UIView alloc]initWithFrame:CGRectZero];
+        selection.backgroundColor=[UIColor.whiteColor colorWithAlphaComponent:0.13];
+        selection.layer.cornerCurve=kCACornerCurveContinuous;
+        selection.userInteractionEnabled=NO;
+        [glass.contentView addSubview:selection];
+        objc_setAssociatedObject(pivot,kDuoSelectedGlassKey,selection,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    CGRect bounds=CGRectInset(item.bounds,4,5);
-    bounds.size.height=MIN(bounds.size.height,53);
-    glass.frame=bounds;
-    glass.layer.cornerRadius=MIN(22,bounds.size.height/2);
-    glass.hidden=NO;
-    [item sendSubviewToBack:glass];
-}
-
-static void fixPivot(UIView *pivot,UIWindow *w){
-    if(!viewVisible(pivot,w))return;
     NSMutableArray<UIView *> *items=[NSMutableArray array];
     collectPivotItems(pivot,items,0);
-    NSMutableArray<UIVisualEffectView *> *glasses=objc_getAssociatedObject(pivot,kDuoGlassKey);
-    if(!glasses){
-        glasses=[NSMutableArray array];
-        objc_setAssociatedObject(pivot,kDuoGlassKey,glasses,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    CGFloat itemBand=wr.size.height;
+    CGFloat height=MIN(59,MAX(43,itemBand-10));
+    CGFloat left=MAX(8,MIN(18,pivot.bounds.size.width*.018));
+    CGFloat y=MAX(1,(pivot.bounds.size.height-height)/2);
+    glass.frame=CGRectMake(left,y,MAX(40,pivot.bounds.size.width-left*2),height);
+    glass.layer.cornerRadius=height/2;
+    [pivot sendSubviewToBack:glass];
+    UIView *selected=objc_getAssociatedObject(pivot,kDuoSelectedGlassKey);
+    CGFloat x=12,selectW=MAX(37,(glass.bounds.size.width-18)/5-10);
+    BOOL found=NO;
+    for(UIView *item in items){
+        if(!tabIsSelected(item))continue;
+        CGRect r=[item convertRect:item.bounds toView:pivot];
+        x=CGRectGetMidX(r)-glass.frame.origin.x-selectW/2;
+        found=YES;break;
     }
-    NSUInteger n=items.count;
-    // Only make 1..8 individual glass buttons; preserve native tap actions.
-    if(n>=3&&n<=8){
-        while(glasses.count<n)[glasses addObject:createGlass(pivot)];
-        for(NSUInteger i=0;i<glasses.count;i++){
-            UIVisualEffectView *glass=glasses[i];
-            if(i>=n){glass.hidden=YES;continue;}
-            UIView *item=items[i];
-            CGRect rect=[item convertRect:item.bounds toView:pivot];
-            if(rect.size.width<=8 || rect.size.height<=8){glass.hidden=YES;continue;}
-            rect=CGRectInset(rect,5,3);
-            rect.size.height=MIN(rect.size.height,51);
-            glass.hidden=NO;
-            glass.frame=rect;
-            glass.layer.cornerRadius=MIN(21,rect.size.height/2);
-            [pivot sendSubviewToBack:glass];
-        }
-    } else {
-        // Some Music builds render their five home tabs without
-        // YTPivotBarItemView children. Keep five individual glass capsules
-        // behind those controls rather than painting one opaque full bar.
-        NSUInteger fallbackCount=5;
-        while(glasses.count<fallbackCount)[glasses addObject:createGlass(pivot)];
-        CGFloat slice=pivot.bounds.size.width/fallbackCount;
-        for(NSUInteger i=0;i<glasses.count;i++){
-            UIVisualEffectView *glass=glasses[i];
-            glass.hidden=i>=fallbackCount;
-            if(i>=fallbackCount)continue;
-            CGFloat itemHeight=MIN(53,MAX(40,pivot.bounds.size.height-12));
-            glass.frame=CGRectMake(i*slice+7,(pivot.bounds.size.height-itemHeight)/2,
-                                   MAX(20,slice-14),itemHeight);
-            glass.layer.cornerRadius=MIN(23,itemHeight/2);
-            [pivot sendSubviewToBack:glass];
-        }
+    if(!found && items.count>=3){
+        CGRect r=[items[0] convertRect:items[0].bounds toView:pivot];
+        x=CGRectGetMidX(r)-glass.frame.origin.x-selectW/2;
+    }else if(!found) {
+        x=9; // default selected home tab when YTM hides selection state
     }
+    x=MAX(4,MIN(x,glass.bounds.size.width-selectW-4));
+    selected.frame=CGRectMake(x,4,selectW,MAX(28,height-8));
+    selected.layer.cornerRadius=MIN(24,selected.bounds.size.height/2);
     pivot.backgroundColor=UIColor.clearColor;
     pivot.opaque=NO;
+}
+// All five original tab buttons are left intact. No individual glass pills:
+static void fixTabItemGlass(UIView *item,UIWindow *w){
+    (void)item; (void)w;
 }
 
 static void shrinkConstraintIfNeeded(UIView *v,CGFloat limit){
