@@ -11,6 +11,7 @@
 
 static const void *kDuoGlassKey=&kDuoGlassKey;
 static const void *kDuoShiftKey=&kDuoShiftKey;
+static const void *kDuoAppliedShiftKey=&kDuoAppliedShiftKey;
 static CFTimeInterval gExplicitFullScreenUntil=0;
 static BOOL gDuoTickInProgress=NO;
 static void (*oldWindowEvent)(id,SEL,UIEvent *);
@@ -172,6 +173,8 @@ static void duoShift(UIView *v,CGFloat translation){
     CGAffineTransform base=original.CGAffineTransformValue;
     CGAffineTransform intended=CGAffineTransformTranslate(base,translation,0);
     if(!CGAffineTransformEqualToTransform(v.transform,intended))v.transform=intended;
+    objc_setAssociatedObject(v,kDuoAppliedShiftKey,@(fabs(translation)),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 static void fixHeader(UIView *header,UIWindow *w){
     if(!viewVisible(header,w))return;
@@ -292,7 +295,11 @@ static void fixHeaderByGeometry(UIView *root,UIWindow *w){
     CGRect ar=[avatar convertRect:avatar.bounds toView:w];
     if(CGRectGetMidY(ar)>101)return;
     CGFloat reserve=MAX(82,w.safeAreaInsets.right+65);
-    CGFloat shift=MIN(132,MAX(67,CGRectGetMaxX(ar)-(w.bounds.size.width-reserve)+6));
+    // Compute from original coordinates so recurring layout passes cannot
+    // make the avatar jump between two different shifts.
+    CGFloat previous=[objc_getAssociatedObject(avatar,kDuoAppliedShiftKey) floatValue];
+    CGFloat shift=MIN(132,MAX(67,CGRectGetMaxX(ar)+previous-
+                                  (w.bounds.size.width-reserve)+6));
     UIView *bell=nil; CGFloat best=CGFLOAT_MAX;
     for(UIView *v in buttons){
         UIView *t=duoHeaderTapRoot(v,w);
