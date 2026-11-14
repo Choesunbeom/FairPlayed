@@ -553,8 +553,13 @@ static void ytmSaveCoverGeometry(UIWindow *w,YTMDuoViews *views){
       @"nav":ytmScreenRect(views->nav,w),
       @"filters":ytmScreenRect(filters,w),
       @"mini":ytmScreenRect(views->mini,w),
+      @"miniHost":ytmScreenRect(views->mini.superview,w),
+      @"miniHostParent":ytmScreenRect(views->mini.superview.superview,w),
+      @"navParent":ytmScreenRect(views->nav.superview,w),
+      @"filtersParent":ytmScreenRect(filters.superview,w),
       @"pivot":ytmScreenRect(views->pivot,w),
-      @"queue":ytmScreenRect(views->queue,w)
+      @"queue":ytmScreenRect(views->queue,w),
+      @"layoutFix":@"v13"
     };
     NSData *json=[NSJSONSerialization dataWithJSONObject:data
                 options:NSJSONWritingPrettyPrinted error:NULL];
@@ -626,6 +631,6 @@ __attribute__((constructor))static void duoBootstrap(void){
             [[NSRunLoop mainRunLoop] addTimer:gLayoutTimer
                                      forMode:NSRunLoopCommonModes];
         });
-        NSLog(@"[YTMDuoFix] v12 cover geometry and static glass, unfolded nav and original audio/queue preserved");
+        NSLog(@"[YTMDuoFix] v13 cover headers and mini host, unfolded nav and original audio/queue preserved");
     }
 }
