@@ -447,25 +447,53 @@ static void ytmCoverRestoreVertical(UIView *v){
 // but chips y=49. In the screenshot the two rows overlap the feed header.
 // Normalize the two independent rows to the unfolded layout's top anchor.
 // No arbitrary resizing or scaling of the home feed is performed.
-static void ytmCoverTopReflow(UIView *v,UIWindow *w,CGFloat expectedY,CGFloat threshold){
-    (void)threshold;
-    if(!v||!w||!DuoCover(w)||DuoPortrait(w))return;
-    NSValue *saved=objc_getAssociatedObject(v,kCoverVerticalOriginKey);
-    if(!saved){
-        saved=[NSValue valueWithCGAffineTransform:v.transform];
-        objc_setAssociatedObject(v,kCoverVerticalOriginKey,saved,
+static CGAffineTransform ytmStoredBaseTransform(UIView *v){
+    if(!v)return CGAffineTransformIdentity;
+    NSValue *base=objc_getAssociatedObject(v,kCoverVerticalOriginKey);
+    if(!base){
+        base=[NSValue valueWithCGAffineTransform:v.transform];
+        objc_setAssociatedObject(v,kCoverVerticalOriginKey,base,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    // Restore the native transform before calculating absolute positions,
-    // preventing accumulating offsets over 0.45s refresh ticks.
-    CGAffineTransform native=saved.CGAffineTransformValue;
-    v.transform=native;
-    CGRect rect=[v convertRect:v.bounds toView:w];
-    if(rect.size.width<w.bounds.size.width*.85 ||
-       rect.size.height<28 || rect.size.height>80)return;
-    CGFloat delta=expectedY-rect.origin.y;
-    if(fabs(delta)>1.5 && fabs(delta)<w.bounds.size.height*.35)
-        v.transform=CGAffineTransformTranslate(native,0,delta);
+    return base.CGAffineTransformValue;
+}
+// Correct the CONTAINER and the child as one unit. v13 translated just the
+// YTMNavigationBarView child from its parent y82 down to y2, leaving it
+// outside its parent's touch and clipping bounds. Likewise filter y58 was
+// outside the MDCHeaderStackView at y82. Moving the parents fixes BOTH
+// rendering and hit testing without shifting the feed or navigation tabs.
+static void ytmAlignCoverHeaderPair(UIView *child,UIWindow *w,
+                                     CGFloat parentY,CGFloat childY){
+    if(!child||!child.superview||!w||!DuoCover(w)||DuoPortrait(w))return;
+    UIView *parent=child.superview;
+    if(parent==w || parent.bounds.size.width<w.bounds.size.width*.84f)return;
+    CGAffineTransform parentBase=ytmStoredBaseTransform(parent);
+    CGAffineTransform childBase=ytmStoredBaseTransform(child);
+    parent.transform=parentBase;
+    child.transform=childBase;
+    CGRect parentRect=[parent convertRect:parent.bounds toView:w];
+    if(parentRect.size.height<18||parentRect.size.height>150)return;
+    CGFloat deltaParent=parentY-parentRect.origin.y;
+    if(fabs(deltaParent)>140)return;
+    if(fabs(deltaParent)>1)parent.transform=CGAffineTransformTranslate(parentBase,0,deltaParent);
+    CGRect childRect=[child convertRect:child.bounds toView:w];
+    CGFloat deltaChild=childY-childRect.origin.y;
+    if(fabs(deltaChild)<140 && fabs(deltaChild)>1)
+        child.transform=CGAffineTransformTranslate(childBase,0,deltaChild);
+    // The transformed child is now INSIDE the transformed container.
+    // Its buttons remain tappable at their visible screen positions.
+    parent.clipsToBounds=NO;
+    parent.layer.masksToBounds=NO;
+}
+static void ytmRestoreCoverHeaderPair(UIView *child){
+    if(!child)return;
+    ytmCoverRestoreVertical(child);
+    ytmCoverRestoreVertical(child.superview);
+}
+// Kept for compatibility: only the paired version should be used on cover.
+static void ytmCoverTopReflow(UIView *v,UIWindow *w,CGFloat expectedY,CGFloat threshold){
+    (void)threshold;
+    ytmAlignCoverHeaderPair(v,w,expectedY,expectedY);
 }
 static void ytmCoverMiniReflow(UIView *mini,UIView *pivot,UIWindow *w){
     if(!mini||!pivot||!w||!DuoCover(w)||DuoPortrait(w))return;
@@ -516,20 +544,20 @@ static void ytmCoverRepairHome(UIWindow *w,YTMDuoViews *views,BOOL home){
     }
     UIView *filters=ytmFindViewByClass(w,@"GOONavigationBar",0);
     if(!DuoCover(w)||!home){
-        ytmCoverRestoreVertical(views->nav);
-        ytmCoverRestoreVertical(filters);
+        ytmRestoreCoverHeaderPair(views->nav);
+        ytmRestoreCoverHeaderPair(filters);
         return;
     }
     if(!DuoPortrait(w)){
         // The cover-landscape screenshot showed header chips around y=180
         // and the Music logo below them. Only correct genuinely displaced
         // header rows; their native x positions and interactions stay intact.
-        ytmCoverTopReflow(views->nav,w,2,0);
-        ytmCoverTopReflow(filters,w,58,0);
+        ytmAlignCoverHeaderPair(views->nav,w,0,2);
+        ytmAlignCoverHeaderPair(filters,w,56,58);
         ytmCoverMiniReflow(views->mini,views->pivot,w);
     }else{
-        ytmCoverRestoreVertical(views->nav);
-        ytmCoverRestoreVertical(filters);
+        ytmRestoreCoverHeaderPair(views->nav);
+        ytmRestoreCoverHeaderPair(filters);
     }
 }
 static NSDictionary *ytmScreenRect(UIView *v,UIWindow *w){
