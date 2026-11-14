@@ -1,7 +1,7 @@
 name: YTMUltimate 9.44 Duo UI fixes — Xcode 27.1
 on:
   push:
-    branches: [feature/ytm-duo-layout-glass-27, feature/ytm-duo-polished-v7, feature/ytm-duo-layout-v8-geometry, feature/ytm-duo-safe-v9-diagnostic, feature/ytm-duo-exact-views-v10, feature/ytm-duo-navglass-v11, feature/ytm-duo-cover-ripple-v12, feature/ytm-duo-cover-exact-v13, feature/ytm-duo-cover-v14-unclip, feature/ytm-duo-cover-v15-stable-layout, feature/ytm-duo-cover-v16-header-audit, feature/ytm-duo-cover-v17-overlays, feature/ytm-duo-cover-v18-glass-header]
+    branches: [feature/ytm-duo-layout-glass-27, feature/ytm-duo-polished-v7, feature/ytm-duo-layout-v8-geometry, feature/ytm-duo-safe-v9-diagnostic, feature/ytm-duo-exact-views-v10, feature/ytm-duo-navglass-v11, feature/ytm-duo-cover-ripple-v12, feature/ytm-duo-cover-exact-v13, feature/ytm-duo-cover-v14-unclip, feature/ytm-duo-cover-v15-stable-layout, feature/ytm-duo-cover-v16-header-audit, feature/ytm-duo-cover-v17-overlays, feature/ytm-duo-cover-v18-glass-header, feature/ytm-duo-v19-miniglass-unified]
     paths:
       - 'Experimental/YTMDuoLayout/**'
       - '.github/workflows/build-ytm-duo-layout.yml'
