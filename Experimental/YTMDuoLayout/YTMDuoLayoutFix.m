@@ -538,24 +538,44 @@ static BOOL ytmV16SetScreenY(UIView *v,UIWindow *w,CGFloat y){
     }
     return YES;
 }
-static void ytmV16AlignPair(UIView *child,UIWindow *w,CGFloat targetY){
-    if(!child||!child.superview||!w)return;
-    UIView *parent=child.superview;
-    if(parent==w || parent.window!=w)return;
-    CGRect p=[parent convertRect:parent.bounds toView:w];
-    if(p.size.width<w.bounds.size.width*.80 || p.size.height<18 ||
-       p.size.height>130)return;
-    // First put parent into the correct vertical slot, then put the
-    // content inside it. Widen the 23pt invisible hit area to fit 56pt.
-    if(!ytmV16SetScreenY(parent,w,targetY))return;
-    if(parent.bounds.size.height<56){
-        CGRect frame=parent.frame;
-        frame.size.height=56;
-        parent.frame=frame;
+// v17: The cover landscape JSON reports navParent y=105 and nav y=23,
+// while filterParent y=82 and filters y=49. A frame-only move in v16 is
+// repeatedly overwritten by YouTube Music's layout constraints.
+// Apply stable absolute post-layout transforms to the TWO parent/child pairs
+// so the header (y=2) precedes the category chips (y=58). Transform-based
+// movement preserves the actual hit-test coordinates.
+static void ytmV17UnclipAncestors(UIView *view,UIWindow *window){
+    UIView *p=view;
+    for(int depth=0;p && p!=window && depth<6;p=p.superview,depth++){
+        if(p.clipsToBounds || p.layer.masksToBounds){
+            // Only along these verified header paths. Do not unclip
+            // the scroll feed, miniplayer, or navigation tabs.
+            p.clipsToBounds=NO;
+            p.layer.masksToBounds=NO;
+        }
     }
-    ytmV16SetScreenY(child,w,targetY);
-    parent.clipsToBounds=NO;
-    parent.layer.masksToBounds=NO;
+}
+static void ytmV17AlignPair(UIView *child,UIWindow *w,CGFloat parentY,CGFloat childY){
+    if(!child || !child.superview || !w)return;
+    UIView *parent=child.superview;
+    if(parent==w || parent.window!=w ||
+       parent.bounds.size.width<w.bounds.size.width*.80)return;
+    CGRect pr=[parent convertRect:parent.bounds toView:w];
+    if(pr.size.height<16 || pr.size.height>145)return;
+    // Do NOT touch constraints or the frame; move only the two original
+    // UIKit view transforms after native layout. v15 stores their base
+    // transforms and accounts for previously applied offsets.
+    if(!ytmPlaceAtWindowY(parent,w,parentY))return;
+    ytmPlaceAtWindowY(child,w,childY);
+    ytmV17UnclipAncestors(child,w);
+    // Filter stack is only 23pt high while its visible pill controls occupy
+    // 56pt. Enlarge the hit region without moving other home feed views.
+    if([parent isKindOfClass:NSClassFromString(@"MDCHeaderStackView")] &&
+       parent.bounds.size.height<55){
+        CGRect bounds=parent.bounds;
+        bounds.size.height=56;
+        parent.bounds=bounds;
+    }
 }
 static void ytmV16FixCoverRows(UIWindow *w){
     if(gV16RepairingRows || !w || !DuoCover(w) || DuoPortrait(w))return;
@@ -566,17 +586,14 @@ static void ytmV16FixCoverRows(UIWindow *w){
     ytmFindExactViews((UIView*)w,&v,&budget,0);
     if(!ytmVisibleInWindow(v.pivot,w))return;
     UIView *filters=ytmFindViewByClass(w,@"GOONavigationBar",0);
-    if(!v.nav || !filters || !ytmVisibleInWindow(v.nav,w) ||
-       !ytmVisibleInWindow(filters,w))return;
+    if(!v.nav || !filters)return;
     gV16RepairingRows=YES;
     @try{
         [UIView performWithoutAnimation:^{
-            ytmV16AlignPair(v.nav,w,2);
-            ytmV16AlignPair(filters,w,58);
+            ytmV17AlignPair(v.nav,w,0,2);
+            ytmV17AlignPair(filters,w,56,58);
         }];
-    }@finally{
-        gV16RepairingRows=NO;
-    }
+    }@finally{gV16RepairingRows=NO;}
 }
 static void (*oldMDCHeaderStackLayout)(id,SEL);
 static void ytmV16MDCHeaderStackLayout(id self,SEL cmd){
