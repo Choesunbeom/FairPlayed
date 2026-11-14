@@ -787,9 +787,12 @@ static void (*oldYTMMiniplayerLayout)(id,SEL);
 static void ytmMiniplayerLayout(id self,SEL cmd){
     if(oldYTMMiniplayerLayout)oldYTMMiniplayerLayout(self,cmd);
     UIWindow *w=((UIView *)self).window;
-    if(w && DuoCover(w)&&!DuoPortrait(w)) {
-        ytmFitCoverMiniContents((UIView *)self,w);
-        ytmV18StyleMini((UIView *)self,w,YES);
+    if(w && DuoIsFoldable(w)){
+        if(DuoCover(w) && !DuoPortrait(w))
+            ytmFitCoverMiniContents((UIView *)self,w);
+        UIView *pivot=ytmFindViewByClass(w,@"YTPivotBarView",0);
+        ytmV18StyleMini((UIView *)self,w,
+                        ytmVisibleInWindow(pivot,w));
     }
 }
 // v18: The latest cover capture confirms v17 expanded the independent
@@ -862,42 +865,72 @@ static UIVisualEffect *ytmV18ClearGlassEffect(void){
     }
     return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
 }
+static const void *kV19MiniOriginalClipKey=&kV19MiniOriginalClipKey;
+static void ytmV19SetUnclipped(UIView *v,BOOL active){
+    if(!v)return;
+    NSNumber *saved=objc_getAssociatedObject(v,kV19MiniOriginalClipKey);
+    if(active){
+        if(!saved)
+            objc_setAssociatedObject(v,kV19MiniOriginalClipKey,
+                        @(v.clipsToBounds),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        v.clipsToBounds=NO;
+        v.layer.masksToBounds=NO;
+    }else if(saved){
+        v.clipsToBounds=saved.boolValue;
+        objc_setAssociatedObject(v,kV19MiniOriginalClipKey,nil,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
 static BOOL gV18StylingMini=NO;
+// v19 unified mini player: all three Duo geometries, never fullscreen.
+// Relocate glass to the full-width YTMWatchView instead of the mini child.
+// The previous in-mini glass was cropped around the right edge in v18.
+// Render glass BEHIND the native controls and keep scrolling feed visible.
 static void ytmV18StyleMini(UIView *mini,UIWindow *w,BOOL active){
     if(gV18StylingMini || !mini)return;
-    active=active && w && DuoCover(w) && !DuoPortrait(w) &&
-           mini.bounds.size.width>650 && mini.bounds.size.width<710;
+    active=active && w && DuoIsFoldable(w) && mini.window==w &&
+           ytmVisibleInWindow(mini,w) && mini.bounds.size.width>=400;
     gV18StylingMini=YES;
     @try{
         UIVisualEffectView *glass=objc_getAssociatedObject(mini,kV18MiniGlassKey);
         UIView *host=mini.superview;
         UIView *watch=host.superview;
+        BOOL fullHost=host && [NSStringFromClass(host.class)
+                               isEqualToString:@"YTMGradientBackgroundView"];
+        BOOL fullWatch=watch && [NSStringFromClass(watch.class)
+                                 isEqualToString:@"YTMWatchView"] &&
+                       host.superview==watch;
+        UIView *surface=fullWatch?watch:mini;
         ytmV18Background(mini,active);
-        if(host && [NSStringFromClass(host.class)
-                    isEqualToString:@"YTMGradientBackgroundView"]){
+        if(fullHost){
             ytmV18Background(host,active);
             ytmV18HostGradient(host,active);
         }
-        // The actual black field in v17 was an opaque, empty YTMWatchView
-        // sibling. It is now 678pt wide but still black: clear its fill.
-        if([NSStringFromClass(watch.class) isEqualToString:@"YTMWatchView"]){
-            for(UIView *v in watch.subviews){
+        // The old separate opaque background is tagged by the v17
+        // layout module. It must not block the background song list.
+        if(fullWatch){
+            for(UIView *v in watch.subviews)
                 if(objc_getAssociatedObject(v,kV17MiniBackdropKey))
                     ytmV18Background(v,active);
-            }
         }
         for(UIView *strip in mini.subviews){
             if(![NSStringFromClass(strip.class) isEqualToString:@"UIView"])
                 continue;
+            ytmV18Background(strip,active);
             for(UIView *sub in strip.subviews){
                 if([sub isKindOfClass:UICollectionView.class]){
                     ytmV18Background(sub,active);
                     ytmV18Opaque(sub,active);
+                    for(UIView *cell in sub.subviews)
+                        if([cell isKindOfClass:UICollectionViewCell.class])
+                            ytmV18Background(cell,active);
                 }
             }
         }
         ytmV18Opaque(mini,active);
         ytmV18Opaque(host,active);
+        ytmV19SetUnclipped(mini,active);
+        ytmV19SetUnclipped(host,active);
         if(!active){
             if(glass)glass.hidden=YES;
             return;
@@ -905,27 +938,46 @@ static void ytmV18StyleMini(UIView *mini,UIWindow *w,BOOL active){
         if(!glass){
             glass=[[UIVisualEffectView alloc]
                     initWithEffect:ytmV18ClearGlassEffect()];
-            glass.userInteractionEnabled=NO; // native playback buttons win
-            glass.alpha=1;                   // do not weaken glass render
+            glass.userInteractionEnabled=NO;
+            glass.alpha=1;
             glass.clipsToBounds=YES;
             glass.layer.cornerCurve=kCACornerCurveContinuous;
-            glass.layer.borderWidth=.6f;
+            glass.layer.borderWidth=.65f;
             glass.layer.borderColor=
-                [[UIColor whiteColor] colorWithAlphaComponent:.22f].CGColor;
+                [[UIColor whiteColor] colorWithAlphaComponent:.24f].CGColor;
             objc_setAssociatedObject(mini,kV18MiniGlassKey,glass,
                                      OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
-        glass.frame=CGRectInset(mini.bounds,7,2);
-        glass.layer.cornerRadius=17.0f;
+        // Window-aligned width (rather than its child's narrow snapshot).
+        // Within watch, use the mini's own window-converted y so cover
+        // portrait, landscape and unfolded views all match.
+        CGRect mr=[mini convertRect:mini.bounds toView:surface];
+        if(fullWatch && watch.bounds.size.width>mr.size.width*.94){
+            mr.origin.x=0;
+            mr.size.width=watch.bounds.size.width;
+        }
+        glass.frame=CGRectInset(mr,8.0f,2.0f);
+        glass.layer.cornerRadius=18.0f;
         glass.hidden=NO;
-        if(glass.superview!=mini){
+        if(glass.superview!=surface){
             [glass removeFromSuperview];
-            [mini insertSubview:glass atIndex:0];
+            if(fullWatch)
+                [watch insertSubview:glass belowSubview:host];
+            else
+                [mini insertSubview:glass atIndex:0];
+        }
+        if(fullWatch){
+            // A sibling effect view cannot be clipped by the native
+            // miniplayer's collection view, unlike v18's child glass.
+            if([watch.subviews containsObject:host]){
+                [watch insertSubview:glass belowSubview:host];
+            }
         }else{
             [mini sendSubviewToBack:glass];
         }
     }@finally{gV18StylingMini=NO;}
 }
+
 // v17: In the actual cover-landscape JSON the YTMWatchView contains one
 // empty, fully opaque UIView at x=118.33 y=320 w=440.67 h=64. This EXACT
 // rectangle is the black centered strip in the screenshot. Its sibling
@@ -1044,10 +1096,16 @@ static void ytmCoverRepairHome(UIWindow *w,YTMDuoViews *views,BOOL home){
               shape,DuoCover(w));
     }
     UIView *filters=ytmFindViewByClass(w,@"GOONavigationBar",0);
-    if(!DuoCover(w)||!home){
+    if(!home){
         ytmRestoreCoverHeaderPair(views->nav);
         ytmRestoreCoverHeaderPair(filters);
         ytmV18StyleMini(views->mini,w,NO);
+        return;
+    }
+    if(!DuoCover(w)){
+        ytmRestoreCoverHeaderPair(views->nav);
+        ytmRestoreCoverHeaderPair(filters);
+        ytmV18StyleMini(views->mini,w,YES);
         return;
     }
     if(!DuoPortrait(w)){
@@ -1064,7 +1122,7 @@ static void ytmCoverRepairHome(UIWindow *w,YTMDuoViews *views,BOOL home){
     }else{
         ytmRestoreCoverHeaderPair(views->nav);
         ytmRestoreCoverHeaderPair(filters);
-        ytmV18StyleMini(views->mini,w,NO);
+        ytmV18StyleMini(views->mini,w,YES);
     }
 }
 static NSDictionary *ytmScreenRect(UIView *v,UIWindow *w){
@@ -1181,7 +1239,7 @@ static void ytmSaveCoverGeometry(UIWindow *w,YTMDuoViews *views){
       @"filtersParent":ytmScreenRect(filters.superview,w),
       @"pivot":ytmScreenRect(views->pivot,w),
       @"queue":ytmScreenRect(views->queue,w),
-      @"layoutFix":@"v18"
+      @"layoutFix":@"v19"
     };
     NSData *json=[NSJSONSerialization dataWithJSONObject:data
                 options:NSJSONWritingPrettyPrinted error:NULL];
@@ -1271,6 +1329,6 @@ __attribute__((constructor))static void duoBootstrap(void){
             [[NSRunLoop mainRunLoop] addTimer:gLayoutTimer
                                      forMode:NSRunLoopCommonModes];
         });
-        NSLog(@"[YTMDuoFix] v18 clear mini Liquid Glass and cover-landscape right-aligned navigation; unfolded/audio preserved");
+        NSLog(@"[YTMDuoFix] v19 raised glass tab dock + full-width mini glass on cover/opened; original audio retained");
     }
 }
