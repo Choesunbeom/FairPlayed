@@ -251,6 +251,7 @@ static void ytmV18PlaceBrand(UIView *nav,UIWindow *w,BOOL home){
                    r.size.width>=42 && r.size.width<245 &&
                    r.size.height>=24 && r.size.height<=100){
                     ytmV18TranslateBrand(v,active?34.0f:0);
+                    moved=YES;
                     break;
                 }
             }
@@ -776,9 +777,11 @@ static void ytmMiniplayerLayout(id self,SEL cmd){
 // background to the full 678pt, but the actual UICollectionView is STILL
 // bgAlpha=1. Remove only the opaque player backgrounds and render an
 // untouchable, clear Liquid Glass surface UNDER the native song controls.
+static const void *kV17MiniBackdropKey=&kV17MiniBackdropKey;
 static const void *kV18MiniGlassKey=&kV18MiniGlassKey;
 static const void *kV18MiniSavedColorKey=&kV18MiniSavedColorKey;
 static const void *kV18GradientOpacityKey=&kV18GradientOpacityKey;
+static const void *kV18SavedOpaqueKey=&kV18SavedOpaqueKey;
 static void ytmV18Background(UIView *v,BOOL clear){
     if(!v)return;
     if(clear){
@@ -796,6 +799,19 @@ static void ytmV18Background(UIView *v,BOOL clear){
             objc_setAssociatedObject(v,kV18MiniSavedColorKey,nil,
                                      OBJC_ASSOCIATION_ASSIGN);
         }
+    }
+}
+static void ytmV18Opaque(UIView *v,BOOL clear){
+    if(!v)return;
+    NSNumber *saved=objc_getAssociatedObject(v,kV18SavedOpaqueKey);
+    if(clear){
+        if(!saved)objc_setAssociatedObject(v,kV18SavedOpaqueKey,@(v.opaque),
+                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        v.opaque=NO;
+    }else if(saved){
+        v.opaque=saved.boolValue;
+        objc_setAssociatedObject(v,kV18SavedOpaqueKey,nil,
+                                 OBJC_ASSOCIATION_ASSIGN);
     }
 }
 static void ytmV18HostGradient(UIView *host,BOOL clear){
@@ -857,12 +873,12 @@ static void ytmV18StyleMini(UIView *mini,UIWindow *w,BOOL active){
             for(UIView *sub in strip.subviews){
                 if([sub isKindOfClass:UICollectionView.class]){
                     ytmV18Background(sub,active);
-                    sub.opaque=!active;
+                    ytmV18Opaque(sub,active);
                 }
             }
         }
-        mini.opaque=!active;
-        if(host)host.opaque=!active;
+        ytmV18Opaque(mini,active);
+        ytmV18Opaque(host,active);
         if(!active){
             if(glass)glass.hidden=YES;
             return;
@@ -895,7 +911,6 @@ static void ytmV18StyleMini(UIView *mini,UIWindow *w,BOOL active){
 // empty, fully opaque UIView at x=118.33 y=320 w=440.67 h=64. This EXACT
 // rectangle is the black centered strip in the screenshot. Its sibling
 // YTMMiniPlayerView is already full-width, so repair only the rogue backdrop.
-static const void *kV17MiniBackdropKey=&kV17MiniBackdropKey;
 static BOOL gV17SurfaceRepairing=NO;
 static void ytmV17RepairMiniBackdrop(UIView *watch){
     if(gV17SurfaceRepairing || !watch)return;
