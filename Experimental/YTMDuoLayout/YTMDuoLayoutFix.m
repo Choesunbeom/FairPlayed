@@ -410,6 +410,139 @@ static void ytmFixGlassDock(YTMDuoViews *views,UIWindow *w,BOOL home){
         selection.hidden=YES;
     }
 }
+
+// A change between the 1.421 (opened) and 1.455 (cover) Duo ratios is an
+// actual display geometry switch, NOT a new orientation of the same canvas.
+// Request one native layout pass whenever that changes; no recurring forced
+// invalidation that could stutter the player.
+static const void *kCoverGeometryKey=&kCoverGeometryKey;
+static const void *kCoverVerticalOriginKey=&kCoverVerticalOriginKey;
+static UIView *ytmFindViewByClass(UIView *root,NSString *type,int depth){
+    if(!root||depth>34)return nil;
+    if([NSStringFromClass(root.class) isEqualToString:type] &&
+       root.window && !root.hidden)return root;
+    for(UIView *child in root.subviews){
+        UIView *found=ytmFindViewByClass(child,type,depth+1);
+        if(found)return found;
+    }
+    return nil;
+}
+static void ytmCoverRestoreVertical(UIView *v){
+    if(!v)return;
+    NSValue *original=objc_getAssociatedObject(v,kCoverVerticalOriginKey);
+    if(original && !CGAffineTransformEqualToTransform(v.transform,
+                                                      original.CGAffineTransformValue))
+        v.transform=original.CGAffineTransformValue;
+}
+static void ytmCoverTopReflow(UIView *v,UIWindow *w,CGFloat expectedY,CGFloat threshold){
+    if(!v||!w)return;
+    NSValue *saved=objc_getAssociatedObject(v,kCoverVerticalOriginKey);
+    if(!saved){
+        saved=[NSValue valueWithCGAffineTransform:v.transform];
+        objc_setAssociatedObject(v,kCoverVerticalOriginKey,saved,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    // Compare with the original transform, never the transform that our
+    // previous timer tick applied (avoids slowly drifting off-screen).
+    v.transform=saved.CGAffineTransformValue;
+    CGRect rect=[v convertRect:v.bounds toView:w];
+    CGFloat delta=0;
+    if(rect.origin.y>threshold && rect.origin.y<w.bounds.size.height*.50)
+        delta=expectedY-rect.origin.y;
+    if(fabs(delta)>1)
+        v.transform=CGAffineTransformTranslate(saved.CGAffineTransformValue,0,delta);
+}
+static void ytmCoverMiniReflow(UIView *mini,UIView *pivot,UIWindow *w){
+    if(!mini||!pivot||!w||!DuoCover(w)||DuoPortrait(w))return;
+    CGRect tab=[pivot convertRect:pivot.bounds toView:w];
+    CGRect m=[mini convertRect:mini.bounds toView:w];
+    if(!CGRectIntersectsRect(tab,w.bounds) || tab.size.height<38)return;
+    CGFloat desiredY=MAX(0,CGRectGetMinY(tab)-64);
+    // Only repair an actually displaced/centered native dock. The normal
+    // full-width mini-player is never touched.
+    BOOL wrongWidth=m.size.width<w.bounds.size.width*.91 ||
+                    m.origin.x>14;
+    BOOL wrongY=fabs(m.origin.y-desiredY)>32;
+    if(!wrongWidth && !wrongY)return;
+    CGRect desired=CGRectMake(0,desiredY,w.bounds.size.width,64);
+    UIView *host=mini.superview;
+    if(host && [NSStringFromClass(host.class)
+                isEqualToString:@"YTMGradientBackgroundView"] && host.superview){
+        CGRect newHost=[w convertRect:desired toView:host.superview];
+        host.frame=newHost;
+        mini.frame=host.bounds;
+    }else if(mini.superview){
+        mini.frame=[w convertRect:desired toView:mini.superview];
+    }
+}
+static void ytmCoverRepairHome(UIWindow *w,YTMDuoViews *views,BOOL home){
+    if(!w||!views)return;
+    NSString *shape=[NSString stringWithFormat:@"%.1fx%.1f",
+                     w.bounds.size.width,w.bounds.size.height];
+    NSString *oldShape=objc_getAssociatedObject(w,kCoverGeometryKey);
+    BOOL sizeChanged=![oldShape isEqualToString:shape];
+    if(sizeChanged){
+        objc_setAssociatedObject(w,kCoverGeometryKey,shape,
+                                 OBJC_ASSOCIATION_COPY_NONATOMIC);
+        UIView *root=w.rootViewController.viewIfLoaded;
+        [root setNeedsLayout];
+        [views->nav setNeedsLayout];
+        [views->pivot setNeedsLayout];
+        [views->mini setNeedsLayout];
+        NSLog(@"[YTMDuoFix] geometry changed to %@ cover=%d",
+              shape,DuoCover(w));
+    }
+    UIView *filters=ytmFindViewByClass(w,@"GOONavigationBar",0);
+    if(!DuoCover(w)||!home){
+        ytmCoverRestoreVertical(views->nav);
+        ytmCoverRestoreVertical(filters);
+        return;
+    }
+    if(!DuoPortrait(w)){
+        // The cover-landscape screenshot showed header chips around y=180
+        // and the Music logo below them. Only correct genuinely displaced
+        // header rows; their native x positions and interactions stay intact.
+        ytmCoverTopReflow(views->nav,w,2,85);
+        ytmCoverTopReflow(filters,w,64,110);
+        ytmCoverMiniReflow(views->mini,views->pivot,w);
+    }else{
+        ytmCoverRestoreVertical(views->nav);
+        ytmCoverRestoreVertical(filters);
+    }
+}
+static NSDictionary *ytmScreenRect(UIView *v,UIWindow *w){
+    if(!v||!w||v.window!=w)return @{};
+    CGRect r=[v convertRect:v.bounds toView:w];
+    return @{@"class":NSStringFromClass(v.class),
+             @"x":@(r.origin.x),@"y":@(r.origin.y),
+             @"w":@(r.size.width),@"h":@(r.size.height),
+             @"hidden":@(v.hidden)};
+}
+static void ytmSaveCoverGeometry(UIWindow *w,YTMDuoViews *views){
+    static NSUInteger counter=0;
+    if(!DuoCover(w)||++counter%18!=0)return;
+    UIView *filters=ytmFindViewByClass(w,@"GOONavigationBar",0);
+    UIEdgeInsets safe=w.safeAreaInsets;
+    NSDictionary *data=@{
+      @"purpose":@"YTM Duo cover UI geometry (no media/account text)",
+      @"screen":@{@"w":@(w.bounds.size.width),@"h":@(w.bounds.size.height)},
+      @"safeArea":@{@"top":@(safe.top),@"right":@(safe.right),
+                    @"bottom":@(safe.bottom),@"left":@(safe.left)},
+      @"nav":ytmScreenRect(views->nav,w),
+      @"filters":ytmScreenRect(filters,w),
+      @"mini":ytmScreenRect(views->mini,w),
+      @"pivot":ytmScreenRect(views->pivot,w),
+      @"queue":ytmScreenRect(views->queue,w)
+    };
+    NSData *json=[NSJSONSerialization dataWithJSONObject:data
+                options:NSJSONWritingPrettyPrinted error:NULL];
+    if(!json)return;
+    NSURL *docs=[[NSFileManager defaultManager]
+           URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
+    NSString *name=DuoPortrait(w)?@"YTMDuo_cover_portrait.json":
+                                    @"YTMDuo_cover_landscape.json";
+    [json writeToURL:[docs URLByAppendingPathComponent:name] atomically:YES];
+}
 static void duoV10Tick(NSTimer *timer){
     (void)timer;
     if(gDuoTickInProgress)return;
