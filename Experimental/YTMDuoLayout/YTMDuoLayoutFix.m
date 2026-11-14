@@ -139,6 +139,7 @@ static const void *kQueueHiddenByUsKey = &kQueueHiddenByUsKey;
 static const void *kGlassDockKey = &kGlassDockKey;
 static const void *kGlassContainerKey = &kGlassContainerKey;
 static const void *kGlassHairlineKey = &kGlassHairlineKey;
+static const void *kGlassSelectionKey = &kGlassSelectionKey;
 
 typedef struct {
     __unsafe_unretained UIView *nav;
@@ -275,7 +276,19 @@ static UIVisualEffect *ytmGlassMaterial(void){
         SEL sel=NSSelectorFromString(@"effectWithStyle:");
         if(cls && [cls respondsToSelector:sel]){
             id effect=((id(*)(id,SEL,NSInteger))objc_msgSend)(cls,sel,0);
-            if([effect isKindOfClass:UIVisualEffect.class])return effect;
+            if([effect isKindOfClass:UIVisualEffect.class]) {
+                // Native Liquid Glass must be STATIC here. YTM already
+                // handles tab gestures; a second interactive glass layer
+                // was producing an oversized expanding press halo.
+                SEL interactive=NSSelectorFromString(@"setInteractive:");
+                if([effect respondsToSelector:interactive])
+                    ((void(*)(id,SEL,BOOL))objc_msgSend)(effect,interactive,NO);
+                SEL tint=NSSelectorFromString(@"setTintColor:");
+                if([effect respondsToSelector:tint])
+                    ((void(*)(id,SEL,id))objc_msgSend)(effect,tint,
+                      [UIColor.blackColor colorWithAlphaComponent:0.13f]);
+                return effect;
+            }
         }
     }
     return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark];
@@ -292,6 +305,26 @@ static UIView *ytmTabItemContainer(YTMDuoViews *views,UIView *pivot){
     }
     return count==5?container:nil;
 }
+// Material Components' ink effect can scale far beyond a 47pt tab and
+// visually resembles a huge circle when mixed with Liquid Glass.
+// Remove only the decorative ink; leave native tab controls untouched.
+static void ytmDisablePivotInk(UIView *view,int depth){
+    if(!view || depth>9)return;
+    NSString *cls=NSStringFromClass(view.class);
+    if([cls containsString:@"MDCInkView"]){
+        view.hidden=YES;
+        view.alpha=0;
+        return;
+    }
+    for(UIView *sub in view.subviews)ytmDisablePivotInk(sub,depth+1);
+}
+static BOOL ytmTabSelected(UIView *item){
+    if((item.accessibilityTraits & UIAccessibilityTraitSelected)!=0)return YES;
+    SEL selected=NSSelectorFromString(@"isSelected");
+    if([item respondsToSelector:selected])
+        return ((BOOL(*)(id,SEL))objc_msgSend)(item,selected);
+    return NO;
+}
 static void ytmFixGlassDock(YTMDuoViews *views,UIWindow *w,BOOL home){
     UIView *pivot=views->pivot;
     if(!pivot)return;
@@ -306,43 +339,74 @@ static void ytmFixGlassDock(YTMDuoViews *views,UIWindow *w,BOOL home){
     if(!glass || container!=target){
         [glass removeFromSuperview];
         glass=[[UIVisualEffectView alloc]initWithEffect:ytmGlassMaterial()];
-        glass.userInteractionEnabled=NO; // preserve all tab actions/gestures
+        glass.userInteractionEnabled=NO;
         glass.clipsToBounds=YES;
         glass.layer.cornerCurve=kCACornerCurveContinuous;
-        glass.layer.borderWidth=0.75f;
-        glass.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:0.20f].CGColor;
-        [target insertSubview:glass atIndex:0]; // below the five native icons
+        glass.layer.borderWidth=0.65f;
+        glass.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:0.23].CGColor;
+        [target insertSubview:glass atIndex:0]; // native tap controls on top
         objc_setAssociatedObject(pivot,kGlassDockKey,glass,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(pivot,kGlassContainerKey,target,
                                  OBJC_ASSOCIATION_ASSIGN);
         CALayer *line=[CALayer layer];
-        line.backgroundColor=[UIColor.whiteColor colorWithAlphaComponent:0.19f].CGColor;
+        line.backgroundColor=[UIColor.whiteColor colorWithAlphaComponent:0.14].CGColor;
         [glass.layer addSublayer:line];
         objc_setAssociatedObject(pivot,kGlassHairlineKey,line,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIView *selection=[[UIView alloc]initWithFrame:CGRectZero];
+        selection.userInteractionEnabled=NO;
+        selection.backgroundColor=[UIColor.whiteColor colorWithAlphaComponent:0.085];
+        selection.layer.cornerCurve=kCACornerCurveContinuous;
+        selection.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:0.07].CGColor;
+        selection.layer.borderWidth=0.55;
+        selection.hidden=YES;
+        [glass.contentView addSubview:selection];
+        objc_setAssociatedObject(pivot,kGlassSelectionKey,selection,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     CGFloat minX=CGFLOAT_MAX,maxX=-CGFLOAT_MAX;
     CGFloat minY=CGFLOAT_MAX,maxY=-CGFLOAT_MAX;
+    UIView *activeTab=nil;
     for(NSUInteger i=0;i<views->itemCount;i++){
         UIView *tab=views->items[i];
         if(tab.hidden || tab.superview!=target || tab.bounds.size.width<30)continue;
         CGRect r=[tab convertRect:tab.bounds toView:target];
         minX=MIN(minX,CGRectGetMinX(r)); maxX=MAX(maxX,CGRectGetMaxX(r));
         minY=MIN(minY,CGRectGetMinY(r)); maxY=MAX(maxY,CGRectGetMaxY(r));
+        if(ytmTabSelected(tab))activeTab=tab;
+        ytmDisablePivotInk(tab,0);
     }
     if(minX==CGFLOAT_MAX)return;
-    // One slim contiguous dock, no huge individual capsules and no separate
-    // UIWindow overlay. Position is derived from the five real tabs.
-    CGRect frame=CGRectMake(minX+8,minY-3,
-                            MAX(60,maxX-minX-16),
-                            MIN(60,MAX(46,maxY-minY+11)));
+    // The entire native tab strip is 82pt, items are 47pt. One 52pt
+    // capsule behind the items is sufficient. Do not create five pills.
+    CGRect frame=CGRectMake(minX+10,MAX(2,minY+1),
+                            MAX(80,maxX-minX-20),52.0f);
     glass.frame=frame;
-    glass.layer.cornerRadius=frame.size.height/2;
+    glass.layer.cornerRadius=26.0f;
     CALayer *line=objc_getAssociatedObject(pivot,kGlassHairlineKey);
-    line.frame=CGRectMake(18,0.7,MAX(0,frame.size.width-36),0.6);
+    line.frame=CGRectMake(19,0.8,MAX(0,frame.size.width-38),0.6);
     glass.hidden=NO;
     [target sendSubviewToBack:glass];
+    // Clip any remaining native ink-scale animations to the tab region.
+    target.clipsToBounds=YES;
+    pivot.clipsToBounds=YES;
+    UIView *selection=objc_getAssociatedObject(pivot,kGlassSelectionKey);
+    if(activeTab && selection){
+        CGRect r=[activeTab convertRect:activeTab.bounds toView:target];
+        CGFloat x=CGRectGetMidX(r)-CGRectGetMinX(frame)-r.size.width*0.39f;
+        CGFloat width=r.size.width*0.78f;
+        x=MAX(6,MIN(x,frame.size.width-width-6));
+        CGRect chosen=CGRectMake(x,4.2,width,frame.size.height-8.4f);
+        if(!CGRectEqualToRect(selection.frame,chosen))
+            [UIView animateWithDuration:0.17 animations:^{
+                selection.frame=chosen;
+                selection.layer.cornerRadius=chosen.size.height/2;
+            }];
+        selection.hidden=NO;
+    }else if(selection){
+        selection.hidden=YES;
+    }
 }
 static void duoV10Tick(NSTimer *timer){
     (void)timer;
