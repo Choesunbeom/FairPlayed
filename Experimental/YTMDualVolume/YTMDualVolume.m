@@ -161,6 +161,8 @@ typedef NS_ENUM(NSInteger, TouchMode) {TouchIdle, TouchWaiting, TouchSystem, Tou
 @interface YTMDualVolumeOverlay: UIControl
 @property(nonatomic,weak)UIView *anchor;
 @property(nonatomic,strong)NSTimer *holdTimer;
+@property(nonatomic,strong)NSTimer *autoHideTimer;
+@property(nonatomic,assign)BOOL controlsVisible;
 @property(nonatomic,strong)CADisplayLink *layoutLink;
 @property(nonatomic,strong)MPVolumeView *volumeView;
 @property(nonatomic,strong)CALayer *systemTrack;
@@ -174,6 +176,9 @@ typedef NS_ENUM(NSInteger, TouchMode) {TouchIdle, TouchWaiting, TouchSystem, Tou
 - (instancetype)initWithAnchor:(UIView *)anchor;
 - (void)reposition;
 - (void)drawTracks;
+- (void)revealControls;
+- (void)armAutoHide;
+- (void)dismissControls;
 @end
 
 @implementation YTMDualVolumeOverlay
@@ -185,6 +190,7 @@ typedef NS_ENUM(NSInteger, TouchMode) {TouchIdle, TouchWaiting, TouchSystem, Tou
     self.userInteractionEnabled=YES;
     self.exclusiveTouch=YES;
     _mode=TouchIdle;
+    _controlsVisible=NO;
 
     _volumeView=[[MPVolumeView alloc]initWithFrame:CGRectMake(-35,-35,2,2)];
     _volumeView.showsRouteButton=NO;
@@ -200,13 +206,17 @@ typedef NS_ENUM(NSInteger, TouchMode) {TouchIdle, TouchWaiting, TouchSystem, Tou
     _systemFill.backgroundColor=UIColor.whiteColor.CGColor;
     _orangeTrack.backgroundColor=[orange colorWithAlphaComponent:0.30].CGColor;
     _orangeFill.backgroundColor=orange.CGColor;
-    for(CALayer *l in @[_systemTrack,_systemFill,_orangeTrack,_orangeFill])[self.layer addSublayer:l];
+    for(CALayer *l in @[_systemTrack,_systemFill,_orangeTrack,_orangeFill]) {
+        l.opacity=0.0f; // Invisible by default, without disabling the touch surface
+        [self.layer addSublayer:l];
+    }
 
     _title=[CATextLayer layer];
     _title.contentsScale=UIScreen.mainScreen.scale;
     _title.alignmentMode=kCAAlignmentCenter;
-    _title.fontSize=11;
+    _title.fontSize=10;
     _title.foregroundColor=UIColor.whiteColor.CGColor;
+    _title.opacity=0.0f;
     [self.layer addSublayer:_title];
     __weak typeof(self) weakSelf=self;
     _notificationToken=[[NSNotificationCenter defaultCenter]
@@ -224,6 +234,7 @@ typedef NS_ENUM(NSInteger, TouchMode) {TouchIdle, TouchWaiting, TouchSystem, Tou
     return self;
 }
 - (void)dealloc {
+    [_autoHideTimer invalidate];
     [_holdTimer invalidate];
     [_layoutLink invalidate];
     if(_notificationToken)[NSNotificationCenter.defaultCenter removeObserver:_notificationToken];
@@ -244,16 +255,18 @@ typedef NS_ENUM(NSInteger, TouchMode) {TouchIdle, TouchWaiting, TouchSystem, Tou
     for(UIView *v=source.superview;v&&visible;v=v.superview){
         if(v.hidden||v.alpha<0.05)visible=NO;
     }
-    if(!visible){self.hidden=YES;return;}
+    if(!visible){self.hidden=YES;[self dismissControls];return;}
     if(self.superview!=window)[window addSubview:self];
-    CGFloat width=MIN(410,MAX(240,r.size.width*0.79));
+    // Narrower and centered: the transparent activation zone sits in the
+    // whitespace BETWEEN the seek bar and the playback buttons.
+    CGFloat width=MIN(340,MAX(210,r.size.width*0.68));
     CGFloat x=CGRectGetMidX(r)-width/2;
     CGFloat y;
-    if(r.size.height>260) y=CGRectGetMaxY(r)-150;
-    else y=CGRectGetMinY(r)-52;
-    y=MAX(window.safeAreaInsets.top+16,MIN(window.bounds.size.height-window.safeAreaInsets.bottom-42,y));
+    if(r.size.height>260) y=CGRectGetMaxY(r)-135;
+    else y=CGRectGetMinY(r)-37;
+    y=MAX(window.safeAreaInsets.top+16,MIN(window.bounds.size.height-window.safeAreaInsets.bottom-28,y));
     x=MAX(10,MIN(window.bounds.size.width-width-10,x));
-    CGRect frame=CGRectMake(x,y,width,40);
+    CGRect frame=CGRectMake(x,y,width,27);
     if(!CGRectEqualToRect(frame,self.frame))self.frame=frame;
     self.hidden=NO;
     [window bringSubviewToFront:self];
@@ -261,24 +274,61 @@ typedef NS_ENUM(NSInteger, TouchMode) {TouchIdle, TouchWaiting, TouchSystem, Tou
 }
 - (void)drawTracks {
     CGFloat w=MAX(1,self.bounds.size.width-12);
-    CGFloat y=23;
+    // Two slim tracks below a small transient value caption.
+    CGFloat y=14;
     CGFloat sys=bound(AVAudioSession.sharedInstance.outputVolume);
     CGFloat local=gain();
     CGFloat lineHeight=self.mode==TouchApp?4:3;
     self.systemTrack.frame=CGRectMake(6,y,w,4);self.systemTrack.cornerRadius=2;
     self.systemFill.frame=CGRectMake(6,y,w*sys,4);self.systemFill.cornerRadius=2;
-    self.orangeTrack.frame=CGRectMake(6,y+7,w,lineHeight);self.orangeTrack.cornerRadius=lineHeight/2;
-    self.orangeFill.frame=CGRectMake(6,y+7,w*local,lineHeight);self.orangeFill.cornerRadius=lineHeight/2;
-    self.title.frame=CGRectMake(0,0,self.bounds.size.width,18);
+    self.orangeTrack.frame=CGRectMake(6,y+6,w,lineHeight);self.orangeTrack.cornerRadius=lineHeight/2;
+    self.orangeFill.frame=CGRectMake(6,y+6,w*local,lineHeight);self.orangeFill.cornerRadius=lineHeight/2;
+    self.title.frame=CGRectMake(0,-1,self.bounds.size.width,13);
     if(self.mode==TouchApp) {
-        self.title.string=[NSString stringWithFormat:@"YT Music %d%%  ·  R%lu M%lu P%lu",
-          (int)roundf(local*100),(unsigned long)count(renderers),(unsigned long)count(mixers),
-          (unsigned long)count(players)];
+        self.title.string=[NSString stringWithFormat:@"YT Music %d%%",
+          (int)roundf(local*100)];
         self.title.foregroundColor=UIColor.orangeColor.CGColor;
     } else {
         self.title.string=[NSString stringWithFormat:@"시스템 %d%%   ·   YT Music %d%%",
                            (int)roundf(sys*100),(int)roundf(local*100)];
         self.title.foregroundColor=UIColor.whiteColor.CGColor;
+    }
+}
+// Visual layers fade. This UIControl NEVER fades or becomes untouchable:
+ // its clear hit area remains ready for the next touch.
+- (void)setVisualOpacity:(float)opacity duration:(CFTimeInterval)duration {
+    [CATransaction begin];
+    [CATransaction setAnimationDuration:duration];
+    [CATransaction setAnimationTimingFunction:
+        [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]];
+    for(CALayer *l in @[self.systemTrack,self.systemFill,
+                       self.orangeTrack,self.orangeFill,self.title]) {
+        l.opacity=opacity;
+    }
+    [CATransaction commit];
+}
+- (void)revealControls {
+    [self.autoHideTimer invalidate];
+    self.autoHideTimer=nil;
+    if(!self.controlsVisible){
+        self.controlsVisible=YES;
+        [self drawTracks];
+        [self setVisualOpacity:1.0f duration:0.16];
+    }
+}
+- (void)armAutoHide {
+    [self.autoHideTimer invalidate];
+    self.autoHideTimer=[NSTimer timerWithTimeInterval:1.3 target:self
+          selector:@selector(dismissControls) userInfo:nil repeats:NO];
+    [NSRunLoop.mainRunLoop addTimer:self.autoHideTimer forMode:NSRunLoopCommonModes];
+}
+- (void)dismissControls {
+    [self.autoHideTimer invalidate];
+    self.autoHideTimer=nil;
+    if(self.mode!=TouchIdle)return;
+    if(self.controlsVisible){
+        self.controlsVisible=NO;
+        [self setVisualOpacity:0.0f duration:0.26];
     }
 }
 - (UISlider *)findSlider:(UIView *)view {
@@ -314,6 +364,7 @@ typedef NS_ENUM(NSInteger, TouchMode) {TouchIdle, TouchWaiting, TouchSystem, Tou
     [self cancelTimer];
     self.beginPoint=[t locationInView:self];
     self.mode=TouchWaiting;
+    [self revealControls];
     _holdTimer=[NSTimer timerWithTimeInterval:0.42 target:self
                                     selector:@selector(held) userInfo:nil repeats:NO];
     [NSRunLoop.mainRunLoop addTimer:_holdTimer forMode:NSRunLoopCommonModes];
@@ -333,10 +384,12 @@ typedef NS_ENUM(NSInteger, TouchMode) {TouchIdle, TouchWaiting, TouchSystem, Tou
     UITouch *t=touches.anyObject;
     if(t&&(self.mode==TouchWaiting||self.mode==TouchSystem))[self changeSystem:[t locationInView:self]];
     [self cancelTimer];self.mode=TouchIdle;[self drawTracks];
+    [self armAutoHide];
 }
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     (void)touches;(void)event;
     [self cancelTimer];self.mode=TouchIdle;[self drawTracks];
+    [self armAutoHide];
 }
 @end
 
@@ -399,6 +452,6 @@ __attribute__((constructor))static void YTMDualVolumeStart(void) {
                     (IMP)playerControlsLayout,(IMP*)&oldPlayerControlsLayout);
         swizzleOnlyClass(objc_getClass("YTMNowPlayingViewController"),@selector(viewDidAppear:),
                     (IMP)nowPlayingAppear,(IMP*)&oldNowPlayingAppear);
-        NSLog(@"[YTMDualVolume] v2 installed gain=%.2f",gain());
+        NSLog(@"[YTMDualVolume] v3 transient UI installed gain=%.2f",gain());
     }
 }
