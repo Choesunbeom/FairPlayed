@@ -150,7 +150,7 @@ static void collectViewTypes(UIView *v,NSMutableArray *headers,
 }
 
 static void findButtons(UIView *root,NSMutableArray<UIView *> *buttons,int depth) {
-    if(!root||depth>16)return;
+    if(!root||depth>28)return;
     NSString *name=NSStringFromClass(root.class);
     BOOL candidate=[root isKindOfClass:UIControl.class] ||
                    [name containsString:@"Account"] ||
@@ -443,19 +443,30 @@ static void duoLayoutTick(NSTimer *timer){
     if(gDuoTickInProgress)return;
     gDuoTickInProgress=YES;
     @try{
-        UIApplication *app=UIApplication.sharedApplication;
-        NSArray<UIWindow *> *windows=app.windows;
+        NSArray<UIWindow *> *windows=UIApplication.sharedApplication.windows;
         for(UIWindow *w in windows){
-            if(!DuoIsFoldable(w) || w.hidden)continue;
-            NSMutableArray *headers=[NSMutableArray array];
-            NSMutableArray *pivots=[NSMutableArray array];
-            NSMutableArray *minis=[NSMutableArray array];
+            if(!DuoIsFoldable(w)||w.hidden)continue;
+            UIViewController *rootVC=w.rootViewController;
+            if(!rootVC)continue;
+            NSMutableArray<UIView *> *headers=[NSMutableArray array];
+            NSMutableArray<UIView *> *pivots=[NSMutableArray array];
+            NSMutableArray<UIView *> *minis=[NSMutableArray array];
+            NSMutableArray<UIView *> *tabItems=[NSMutableArray array];
             NSUInteger budget=0;
-            collectViewTypes(w,headers,pivots,minis,&budget);
-            if(pivots.count==0)continue;
+            collectViewTypes(w,headers,pivots,minis,tabItems,&budget);
+            // v5 stopped HERE when it could not find YTPivotBarView,
+            // silently disabling the header, mini, and glass fixes.
+            // Never make any fix depend on the others.
+            BOOL isHome=(headers.count>0||pivots.count>0||
+                         tabItems.count>=3||minis.count>0);
+            if(isHome)fixHeaderByGeometry(rootVC.viewIfLoaded,w);
             for(UIView *v in headers)fixHeader(v,w);
             for(UIView *v in pivots)fixPivot(v,w);
-            for(UIView *v in minis)fixMiniplayer(v,w);
+            for(UIView *v in tabItems)fixTabItemGlass(v,w);
+            if(DuoPortrait(w)){
+                collectMiniControllers(rootVC,minis,0);
+                for(UIView *v in minis)fixMiniplayer(v,w);
+            }
         }
     }@catch(NSException *e){
         NSLog(@"[YTMDuoFix] nonfatal layout exception %@",e.reason);
@@ -480,11 +491,11 @@ __attribute__((constructor))static void duoBootstrap(void) {
         swizzleSpecific(NSClassFromString(@"YTPlayerViewController"),@selector(toggleFullscreen),
                         (IMP)duoPlayerToggle,(IMP *)&oldPlayerToggle);
         dispatch_async(dispatch_get_main_queue(), ^{
-            gLayoutTimer=[NSTimer scheduledTimerWithTimeInterval:0.35 repeats:YES block:^(NSTimer *timer){
+            gLayoutTimer=[NSTimer scheduledTimerWithTimeInterval:0.65 repeats:YES block:^(NSTimer *timer){
                 duoLayoutTick(timer);
             }];
             [[NSRunLoop mainRunLoop] addTimer:gLayoutTimer forMode:NSRunLoopCommonModes];
         });
-        NSLog(@"[YTMDuoFix] Duo home header/mini/glass + manual fullscreen guard installed");
+        NSLog(@"[YTMDuoFix] Duo v6 independent home header/mini/native glass + manual fullscreen guard installed");
     }
 }
