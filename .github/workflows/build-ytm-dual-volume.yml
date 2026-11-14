@@ -1,0 +1,44 @@
+name: Build YTMUltimate 9.44 Dual Volume dylib
+on:
+  push:
+    branches: [feature/ytmusic-dual-volume-944]
+    paths:
+      - 'Experimental/YTMDualVolume/**'
+      - '.github/workflows/build-ytm-dual-volume.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ios:
+    runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile arm64 iOS 17+ YTMusic DualVolume injection
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -x objective-c -arch arm64 \
+            -target arm64-apple-ios17.0 -isysroot "$SDK" \
+            -fobjc-arc -fblocks -O2 -dynamiclib \
+            -install_name '@executable_path/Frameworks/YTMDualVolume.dylib' \
+            -Wl,-undefined,dynamic_lookup \
+            -framework Foundation -framework UIKit -framework AVFoundation \
+            -framework AVFAudio -framework MediaPlayer -framework QuartzCore \
+            Experimental/YTMDualVolume/YTMDualVolume.m \
+            -o YTMDualVolume.dylib
+          file YTMDualVolume.dylib
+          xcrun otool -L YTMDualVolume.dylib
+          strings YTMDualVolume.dylib | grep YTMDualVolume
+          shasum -a 256 YTMDualVolume.dylib
+      - name: Upload independent music volume module
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTMUltimate-9.44-DualVolume-dylib
+          path: YTMDualVolume.dylib
+          retention-days: 30
+          if-no-files-found: error
