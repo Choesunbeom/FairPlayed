@@ -788,7 +788,7 @@ static void ytmV16AuditMiniOverlayWalk(UIView *node,UIWindow *w,
               @"parentH":@(CGRectIsNull(pr)?0:pr.size.height),
               @"clips":@(node.clipsToBounds),
               @"alpha":@(node.alpha),@"children":@(node.subviews.count),
-              @"bgAlpha":@(CGColorGetAlpha(node.backgroundColor.CGColor)),
+              @"bgAlpha":@(node.backgroundColor ? CGColorGetAlpha(node.backgroundColor.CGColor) : 0.0f),
               @"depth":@(depth)
             }];
         }
