@@ -1,0 +1,44 @@
+name: YTMUltimate 9.44 Duo UI fixes — Xcode 27.1
+on:
+  push:
+    branches: [feature/ytm-duo-layout-glass-27]
+    paths:
+      - 'Experimental/YTMDuoLayout/**'
+      - '.github/workflows/build-ytm-duo-layout.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build iOS 17+ / iOS 27.1 Duo runtime UI patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -x objective-c -arch arm64 \
+            -target arm64-apple-ios17.0 -isysroot "$SDK" \
+            -fobjc-arc -fblocks -O2 -dynamiclib \
+            -install_name '@executable_path/Frameworks/YTMDuoLayoutFix.dylib' \
+            -Wl,-undefined,dynamic_lookup \
+            -framework Foundation -framework UIKit -framework QuartzCore \
+            Experimental/YTMDuoLayout/YTMDuoLayoutFix.m \
+            -o YTMDuoLayoutFix.dylib
+          file YTMDuoLayoutFix.dylib
+          xcrun otool -L YTMDuoLayoutFix.dylib
+          strings YTMDuoLayoutFix.dylib | grep YTMDuoFix
+          shasum -a 256 YTMDuoLayoutFix.dylib
+      - name: Upload UI patch module
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTMUltimate-9.44-Duo-UI-Glass-fix-dylib
+          path: YTMDuoLayoutFix.dylib
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
