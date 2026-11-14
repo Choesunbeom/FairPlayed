@@ -547,6 +547,10 @@ static BOOL ytmV16SetScreenY(UIView *v,UIWindow *w,CGFloat y){
 static void ytmV17UnclipAncestors(UIView *view,UIWindow *window){
     UIView *p=view;
     for(int depth=0;p && p!=window && depth<6;p=p.superview,depth++){
+        NSString *cls=NSStringFromClass(p.class);
+        if([p isKindOfClass:UIScrollView.class] ||
+           [cls containsString:@"Pivot"] ||
+           [cls containsString:@"WatchView"])break;
         if(p.clipsToBounds || p.layer.masksToBounds){
             // Only along these verified header paths. Do not unclip
             // the scroll feed, miniplayer, or navigation tabs.
