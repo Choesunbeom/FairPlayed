@@ -382,25 +382,61 @@ static void shrinkConstraintIfNeeded(UIView *v,CGFloat limit){
         if(c.constant>limit+15 && c.constant<280)c.constant=limit;
     }
 }
+// The portrait bug is often an oversized HOST container around an otherwise
+// correctly sized mini-player, not the YTMMiniPlayerView itself. Walk upward
+// until we find the nearest oversized bottom dock and compact THAT view.
 static void fixMiniplayer(UIView *mini,UIWindow *w){
     if(!DuoPortrait(w)||!viewVisible(mini,w))return;
-    CGRect inWindow=[mini convertRect:mini.bounds toView:w];
-    if(inWindow.size.width<w.bounds.size.width*.60||
-       inWindow.origin.y<w.bounds.size.height*.5)return;
-    // Foldable compact-portrait can incorrectly use the expanded tray size.
-    // Clamp only the outlier (>90pt), never touch a correctly sized mini bar.
-    CGFloat limit=66.0;
-    if(mini.bounds.size.height<92 || mini.bounds.size.height>300)return;
-    shrinkConstraintIfNeeded(mini,limit);
-    if(mini.superview)shrinkConstraintIfNeeded(mini.superview,limit);
-    CGRect f=mini.frame;
-    CGFloat oldMaxY=CGRectGetMaxY(f);
-    f.size.height=limit;
-    f.origin.y=oldMaxY-limit;
-    if(!CGRectEqualToRect(f,mini.frame)){
-        mini.frame=f;
-        mini.clipsToBounds=YES;
+    CGRect miniRect=[mini convertRect:mini.bounds toView:w];
+    if(miniRect.size.width<w.bounds.size.width*0.58 ||
+       miniRect.origin.y<w.bounds.size.height*0.48)return;
+    UIView *target=nil;
+    UIView *candidate=mini;
+    for(int i=0;i<5 && candidate && candidate!=w;i++,candidate=candidate.superview){
+        CGRect r=[candidate convertRect:candidate.bounds toView:w];
+        NSString *cls=NSStringFromClass(candidate.class);
+        if(r.size.width<w.bounds.size.width*.60 ||
+           r.origin.y<w.bounds.size.height*.48 ||
+           r.size.height<94 || r.size.height>265)continue;
+        if([cls containsString:@"Pivot"]||[cls containsString:@"TabBar"]||
+           [cls containsString:@"ScrollView"]||[cls containsString:@"Collection"])
+           continue;
+        target=candidate;
+        break;
     }
+    if(!target)return;
+    CGFloat limit=64;
+    CGRect old=target.frame;
+    if(old.size.height<=limit+12)return;
+    shrinkConstraintIfNeeded(target,limit);
+    if(target.superview)shrinkConstraintIfNeeded(target.superview,limit);
+    CGRect adjusted=old;
+    adjusted.size.height=limit;
+    adjusted.origin.y=CGRectGetMaxY(old)-limit;
+    target.frame=adjusted;
+    target.clipsToBounds=YES;
+    // When a compact child had been pinned to the top of the expanded tray,
+    // keep it visible after collapsing that tray.
+    if(target!=mini && mini.superview==target && mini.bounds.size.height<=80){
+        CGRect child=mini.frame;
+        child.origin.y=MAX(0,(limit-child.size.height)/2);
+        mini.frame=child;
+    }
+    NSLog(@"[YTMDuoFix] condensed portrait miniplayer host %@ from %.0f to %.0f",
+          NSStringFromClass(target.class),old.size.height,limit);
+}
+static void collectMiniControllers(UIViewController *vc,
+                                   NSMutableArray<UIView *> *minis,int depth){
+    if(!vc||depth>22)return;
+    NSString *name=NSStringFromClass(vc.class);
+    if([name isEqualToString:@"YTMMiniPlayerViewController"]){
+        UIView *view=vc.viewIfLoaded;
+        if(view && view.window && ![minis containsObject:view])[minis addObject:view];
+    }
+    for(UIViewController *child in vc.childViewControllers)
+        collectMiniControllers(child,minis,depth+1);
+    if(vc.presentedViewController)
+        collectMiniControllers(vc.presentedViewController,minis,depth+1);
 }
 static void duoLayoutTick(NSTimer *timer){
     (void)timer;
