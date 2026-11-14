@@ -525,6 +525,67 @@ static void ytmCoverMiniReflow(UIView *mini,UIView *pivot,UIWindow *w){
         mini.frame=[w convertRect:desired toView:mini.superview];
     }
 }
+// v14: the supplied JSON confirms the mini and its gradient host are both
+// full width (678pt), but the screenshot shows a centered ~441pt payload.
+// Check ONLY internal mini containers, never replace the working mini view.
+static UIView *ytmNarrowMiniChild(UIView *root,UIWindow *w,int depth){
+    if(!root||!w||depth>4)return nil;
+    for(UIView *v in root.subviews){
+        CGRect r=[v convertRect:v.bounds toView:w];
+        NSString *cls=NSStringFromClass(v.class);
+        BOOL structural=![v isKindOfClass:UIControl.class] &&
+                        ![v isKindOfClass:UILabel.class] &&
+                        ![v isKindOfClass:UIImageView.class] &&
+                        ![v isKindOfClass:UIScrollView.class];
+        BOOL centered=fabs(CGRectGetMidX(r)-w.bounds.size.width/2)<35;
+        BOOL narrow=r.size.width>=280 &&
+                    r.size.width<w.bounds.size.width*.84f;
+        BOOL tall=r.size.height>=44 && r.size.height<=82;
+        if(structural && centered && narrow && tall &&
+           v.subviews.count>=2 && !v.hidden)return v;
+    }
+    // Diagnostic / correction intentionally avoids deeper, ambiguous
+    // views such as lyric labels and artwork.
+    return nil;
+}
+static void ytmCoverRestoreMiniWidth(UIView *mini,UIWindow *w){
+    if(!mini||!w||!DuoCover(w)||DuoPortrait(w))return;
+    UIView *content=ytmNarrowMiniChild(mini,w,0);
+    if(!content || !content.superview)return;
+    CGRect bounds=[w convertRect:CGRectMake(0,
+                      [mini convertRect:mini.bounds toView:w].origin.y,
+                      w.bounds.size.width,mini.bounds.size.height)
+                            toView:content.superview];
+    if(bounds.size.width<w.bounds.size.width*.94 ||
+       bounds.size.height<48)return;
+    // Use native frame only; do not change system audio / player controls.
+    if(fabs(content.frame.size.width-bounds.size.width)>20){
+        content.frame=bounds;
+        [content setNeedsLayout];
+        NSLog(@"[YTMDuoFix] widened narrow mini content %@",NSStringFromClass(content.class));
+    }
+}
+static NSDictionary *ytmMiniDescendantInfo(UIView *v,UIWindow *w,NSInteger depth){
+    CGRect r=[v convertRect:v.bounds toView:w];
+    return @{@"type":NSStringFromClass(v.class),
+             @"frame":@{@"x":@(r.origin.x),@"y":@(r.origin.y),
+                         @"w":@(r.size.width),@"h":@(r.size.height)},
+             @"depth":@(depth),@"children":@(v.subviews.count),
+             @"clip":@(v.clipsToBounds),@"mask":@(v.layer.masksToBounds),
+             @"hidden":@(v.hidden)};
+}
+static void ytmMiniStructureWalk(UIView *v,UIWindow *w,
+                                 NSMutableArray *output,int depth){
+    if(!v || depth>3 || output.count>=55)return;
+    [output addObject:ytmMiniDescendantInfo(v,w,depth)];
+    for(UIView *sub in v.subviews)
+        ytmMiniStructureWalk(sub,w,output,depth+1);
+}
+static NSArray *ytmMiniSnapshot(UIView *mini,UIWindow *w){
+    NSMutableArray *items=[NSMutableArray array];
+    if(mini)ytmMiniStructureWalk(mini,w,items,0);
+    return items;
+}
 static void ytmCoverRepairHome(UIWindow *w,YTMDuoViews *views,BOOL home){
     if(!w||!views)return;
     NSString *shape=[NSString stringWithFormat:@"%.1fx%.1f",
@@ -555,6 +616,7 @@ static void ytmCoverRepairHome(UIWindow *w,YTMDuoViews *views,BOOL home){
         ytmAlignCoverHeaderPair(views->nav,w,0,2);
         ytmAlignCoverHeaderPair(filters,w,56,58);
         ytmCoverMiniReflow(views->mini,views->pivot,w);
+        ytmCoverRestoreMiniWidth(views->mini,w);
     }else{
         ytmRestoreCoverHeaderPair(views->nav);
         ytmRestoreCoverHeaderPair(filters);
@@ -583,11 +645,12 @@ static void ytmSaveCoverGeometry(UIWindow *w,YTMDuoViews *views){
       @"mini":ytmScreenRect(views->mini,w),
       @"miniHost":ytmScreenRect(views->mini.superview,w),
       @"miniHostParent":ytmScreenRect(views->mini.superview.superview,w),
+      @"miniSubtree":ytmMiniSnapshot(views->mini,w),
       @"navParent":ytmScreenRect(views->nav.superview,w),
       @"filtersParent":ytmScreenRect(filters.superview,w),
       @"pivot":ytmScreenRect(views->pivot,w),
       @"queue":ytmScreenRect(views->queue,w),
-      @"layoutFix":@"v13"
+      @"layoutFix":@"v14"
     };
     NSData *json=[NSJSONSerialization dataWithJSONObject:data
                 options:NSJSONWritingPrettyPrinted error:NULL];
@@ -659,6 +722,6 @@ __attribute__((constructor))static void duoBootstrap(void){
             [[NSRunLoop mainRunLoop] addTimer:gLayoutTimer
                                      forMode:NSRunLoopCommonModes];
         });
-        NSLog(@"[YTMDuoFix] v13 cover headers and mini host, unfolded nav and original audio/queue preserved");
+        NSLog(@"[YTMDuoFix] v14 cover header parent reflow and narrow mini content fix, unfolded layout unchanged");
     }
 }
