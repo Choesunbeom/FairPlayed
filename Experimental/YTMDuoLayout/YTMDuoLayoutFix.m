@@ -360,9 +360,6 @@ __attribute__((constructor))static void duoBootstrap(void) {
         swizzleSpecific(NSClassFromString(@"YTPlayerViewController"),@selector(toggleFullscreen),
                         (IMP)duoPlayerToggle,(IMP *)&oldPlayerToggle);
         dispatch_async(dispatch_get_main_queue(), ^{
-            gLayoutTimer=[NSTimer timerWithTimeInterval:0.35 target:NSBlockOperation.class
-                  selector:@selector(description) userInfo:nil repeats:NO];
-            [gLayoutTimer invalidate];gLayoutTimer=nil;
             gLayoutTimer=[NSTimer scheduledTimerWithTimeInterval:0.35 repeats:YES block:^(NSTimer *timer){
                 duoLayoutTick(timer);
             }];
