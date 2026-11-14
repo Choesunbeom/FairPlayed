@@ -373,8 +373,13 @@ typedef NS_ENUM(NSInteger, TouchMode) {TouchIdle, TouchWaiting, TouchSystem, Tou
     (void)event;
     UITouch *t=touches.anyObject;if(!t)return;
     CGPoint pt=[t locationInView:self];
-    if(self.mode==TouchWaiting&&hypot(pt.x-self.beginPoint.x,pt.y-self.beginPoint.y)>9){
-        [self cancelTimer];self.mode=TouchSystem;
+    // A stationary tap ONLY reveals the transient overlay. Tiny touch jitter
+    // must never jump the system volume to the tapped position.
+    CGFloat dx=pt.x-self.beginPoint.x;
+    CGFloat dy=pt.y-self.beginPoint.y;
+    if(self.mode==TouchWaiting && fabs(dx)>14.0 && fabs(dx)>fabs(dy)*1.25) {
+        [self cancelTimer];
+        self.mode=TouchSystem;
     }
     if(self.mode==TouchSystem)[self changeSystem:pt];
     if(self.mode==TouchApp)[self changeLocal:pt];
@@ -382,7 +387,11 @@ typedef NS_ENUM(NSInteger, TouchMode) {TouchIdle, TouchWaiting, TouchSystem, Tou
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     (void)event;
     UITouch *t=touches.anyObject;
-    if(t&&(self.mode==TouchWaiting||self.mode==TouchSystem))[self changeSystem:[t locationInView:self]];
+    // TouchWaiting = short tap: show volume UI, change NO volume.
+    // TouchSystem = deliberate horizontal drag: finish at release position.
+    if(t && self.mode==TouchSystem) {
+        [self changeSystem:[t locationInView:self]];
+    }
     [self cancelTimer];self.mode=TouchIdle;[self drawTracks];
     [self armAutoHide];
 }
@@ -452,6 +461,6 @@ __attribute__((constructor))static void YTMDualVolumeStart(void) {
                     (IMP)playerControlsLayout,(IMP*)&oldPlayerControlsLayout);
         swizzleOnlyClass(objc_getClass("YTMNowPlayingViewController"),@selector(viewDidAppear:),
                     (IMP)nowPlayingAppear,(IMP*)&oldNowPlayingAppear);
-        NSLog(@"[YTMDualVolume] v3 transient UI installed gain=%.2f",gain());
+        NSLog(@"[YTMDualVolume] v4 tap-to-show UI installed gain=%.2f",gain());
     }
 }
